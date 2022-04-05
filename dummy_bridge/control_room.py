@@ -117,6 +117,25 @@ class ControlRoom:
     async def send_arguments(self, content):
         await self.send_message("Nah, not implemented that yet!")
 
+    async def audit(self, content):
+        self.send_message("Running audit...")
+
+        lines = []
+        room_ids = await self.intent.get_joined_rooms()
+        for room_id in room_ids:
+            joined_members = await self.intent.get_joined_members(room_id)
+            bot_members = [
+                member for member in joined_members
+                if member.startswith(f"@{self.user_prefix}")
+            ]
+            lines.append(
+                f"Room: {room_id} has {len(joined_members)} members "
+                f"({len(bot_members)} bots, "
+                f"{len(joined_members) - len(bot_members)} real users)"
+            )
+
+        await self.send_message("\n".join(lines))
+
     async def generate(self, content):
         bits = content.split()[1:]
         kwargs = {}
