@@ -68,11 +68,19 @@ class DummyBridge:
 
         generator = ContentGenerator(self.user_prefix, self.user_domain)
 
-        self.control_room = ControlRoom(self.appservice, self.owner, generator)
+        self.control_room = ControlRoom(
+            appservice=self.appservice,
+            owner=self.owner,
+            user_prefix=self.user_prefix,
+            generator=generator,
+        )
         self.control_room_id = await self.control_room.bootstrap()
 
     async def on_event(self, event):
         if event.room_id == self.control_room_id:
             await self.control_room.on_event(event)
         else:
-            logger.warning(f"Received event for non control room: {event.event_id}")
+            logger.warning(
+                "Received event for non control room: "
+                f"roomId={event.room_id} eventId={event.event_id}"
+            )

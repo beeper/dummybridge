@@ -1,8 +1,9 @@
 import logging
+import json
 
 from mautrix.appservice import AppService, IntentAPI
 from mautrix.errors import MNotFound
-from mautrix.types import EventType, UserID
+from mautrix.types import EventType, UserID, MessageType, TextMessageEventContent
 
 from .generate import ContentGenerator
 
@@ -11,10 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 HELP_TEXT = """
-Welcome to DummyBridge! The following commands are available:
+👋 Hello, DummyBridge at your service! The following commands are available:
 
 help: show this help text!
 generate: generate fake rooms, users and messages
+arguments: show available arguments for the generate command
 
 Generate takes arguments in the form key=value, here are some examples:
 
@@ -34,11 +36,25 @@ class ControlRoom:
     intent: IntentAPI
     owner: UserID
 
-    def __init__(self, appservice: AppService, owner: UserID, generator: ContentGenerator):
+    def __init__(
+        self,
+        appservice: AppService,
+        owner: UserID,
+        user_prefix: str,
+        generator: ContentGenerator,
+    ):
         self.appservice = appservice
         self.intent = appservice.intent
         self.owner = owner
+        self.user_prefix = user_prefix
         self.generator = generator
+
+        self.command_map = {
+            "help": self.send_help,
+            "arguments": self.send_arguments,
+            "audit": self.audit,
+            "generate": self.generate,
+        }
 
     async def bootstrap(self):
         account_data = {
@@ -72,24 +88,34 @@ class ControlRoom:
 
     async def on_event(self, event):
         if event.type is EventType.ROOM_MESSAGE:
-            if event.content.body == 'help':
-                await self.send_help()
-            elif event.content.body.startswith('generate'):
-                await self.generate(event.content.body)
+            for command_prefix, handler in self.command_map.items():
+                if event.content.body.startswith(command_prefix):
+                    await handler(event.content.body)
+                    break
             else:
                 logger.warning(f"Unexpected control message: {event.content.body}")
+                await self.send_message(
+                    f"⚠️ I don't understand command: {event.content.body}",
+                )
         else:
-            logger.warning(f"Unexpected control even type: {event.type}")
+            logger.warning(f"Unexpected control event type: {event.type}")
+            await self.send_message(f"⚠️ I don't understand event type: {event.type}")
 
     async def send_message(self, content):
         await self.appservice.intent.send_message_event(
             self.room_id,
             EventType.ROOM_MESSAGE,
-            {"msgtype": "m.notice", "body": content},
+            TextMessageEventContent(
+                msgtype=MessageType.NOTICE,
+                body=content,
+            ),
         )
 
-    async def send_help(self):
+    async def send_help(self, content):
         await self.send_message(HELP_TEXT)
+
+    async def send_arguments(self, content):
+        await self.send_message("Nah, not implemented that yet!")
 
     async def generate(self, content):
         bits = content.split()[1:]
@@ -98,18 +124,25 @@ class ControlRoom:
         for bit in bits:
             try:
                 key, value = bit.split("=", 1)
-
-                if key in ("messages", "users"):
-                    value = int(value)
             except ValueError:
                 await self.send_message(f"Invalid argument: {bit}")
                 return
             else:
+                try:
+                    value = json.loads(value)
+                except Exception:
+                    pass
                 kwargs[key] = value
 
-        await self.send_message(f"Generating with arguments: {kwargs}")
-        await self.generator.generate_content(
-            appservice=self.appservice,
-            owner=self.owner,
-            **kwargs,
-        )
+        await self.send_message(f"⏳ Generating with arguments: {kwargs}")
+        try:
+            await self.generator.generate_content(
+                appservice=self.appservice,
+                owner=self.owner,
+                **kwargs,
+            )
+        except Exception as e:
+            await self.send_message(f"💀 Error generating content: {e}")
+            raise
+        else:
+            await self.send_message("✅ Generation complete, enjoy!")
