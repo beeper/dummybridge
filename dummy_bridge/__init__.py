@@ -1,6 +1,9 @@
 import logging
 import re
 
+from typing import Optional
+from urllib.parse import urlparse
+
 from mautrix.api import HTTPAPI
 from mautrix.appservice import AppService
 from mautrix.appservice.state_store import ASStateStore
@@ -32,6 +35,7 @@ class DummyBridge:
         owner: UserID,
         listen_host: str = "127.0.0.1",
         listen_port: int = 5000,
+        domain: Optional[str] = None,
     ):
         self.listen_host = listen_host
         self.listen_port = listen_port
@@ -45,9 +49,12 @@ class DummyBridge:
 
         self.api = HTTPAPI(base_url=homeserver_url, token=registration["as_token"])
 
+        if not domain:
+            domain = urlparse(homeserver_url).netloc
+
         self.appservice = AppService(
             id=registration["id"],
-            domain="beeper-dev.com",
+            domain=domain or homeserver_url,
             server=homeserver_url,
             as_token=registration["as_token"],
             hs_token=registration["hs_token"],

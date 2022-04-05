@@ -12,6 +12,7 @@ async def async_main(
     registration_file,
     port,
     host,
+    domain,
 ):
     logging.basicConfig(level=logging.WARNING)
     logging.getLogger("dummy_bridge").setLevel(level=logging.TRACE)
@@ -25,6 +26,7 @@ async def async_main(
         owner=owner,
         listen_host=host,
         listen_port=port,
+        domain=domain,
     )
     await bridge.bootstrap()
     await asyncio.Event().wait()
@@ -36,6 +38,7 @@ async def async_main(
 @click.argument("registration_file")
 @click.option("--port", type=int, default=5000)
 @click.option("--host", default="127.0.0.1")
+@click.option("--domain")
 def main(*args, **kwargs):
     asyncio.run(async_main(*args, **kwargs))
 
