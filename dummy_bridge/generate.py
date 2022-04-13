@@ -16,17 +16,18 @@ from mautrix.types import (
     MediaMessageEventContent,
     TextMessageEventContent,
     MessageType,
+    ImageInfo,
 )
 
 
-async def _generate_random_image():
+async def _generate_random_image(size):
     """
     Generate a random PNG... using Gravatar (why not).
     """
 
     rnd = "".join(random.choice(ascii_letters) for _ in range(24))
     md5 = hashlib.md5(rnd.encode()).hexdigest()
-    image_url = f"https://gravatar.com/avatar/{md5}?d=identicon"
+    image_url = f"https://gravatar.com/avatar/{md5}?d=identicon&s={size}"
     async with aiohttp.ClientSession() as session:
         async with session.get(image_url) as response:
             content = await response.read()
@@ -48,8 +49,10 @@ class ContentGenerator:
         self,
         appservice: AppService,
         async_media_delay: Optional[int] = None,
+        image_size: Optional[int] = None,
     ):
-        image_bytes = await _generate_random_image()
+        image_size = image_size or 128
+        image_bytes = await _generate_random_image(size=image_size)
 
         if async_media_delay:
             mxc = await appservice.intent.unstable_create_mxc()
@@ -72,6 +75,12 @@ class ContentGenerator:
             msgtype=MessageType.IMAGE,
             url=mxc,
             body=mxc,
+            info=ImageInfo(
+                mimetype="image/png",
+                size=len(image_bytes),
+                width=image_size,
+                height=image_size,
+            ),
         )
 
     async def generate_text_message(self):
@@ -89,6 +98,7 @@ class ContentGenerator:
         message_type: str = "text",
         users: Optional[int] = None,
         async_media_delay: Optional[int] = None,
+        image_size: Optional[int] = None,
     ):
         if room_id is None and users is None:
             users = 1
@@ -121,6 +131,7 @@ class ContentGenerator:
                 return await self.generate_image_message(
                     appservice=appservice,
                     async_media_delay=async_media_delay,
+                    image_size=image_size,
                 )
         else:
             raise ValueError(f"Invalid `message_type`: {message_type}")
