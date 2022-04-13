@@ -1,5 +1,6 @@
 import logging
 import json
+from inspect import signature
 
 from mautrix.appservice import AppService, IntentAPI
 from mautrix.errors import MNotFound
@@ -74,14 +75,14 @@ class ControlRoom:
             logger.debug(f'Using existing control room {room_id}')
             joined_members = await self.intent.get_joined_members(room_id)
         else:
-            logger.debug('Creating new control room')
+            logger.debug("Creating new control room")
             room_id = await self.intent.create_room(name="DummyBridge Control")
             await self.intent.join_room(room_id)
             account_data["control_room_id"] = room_id
             await self.intent.set_account_data("DummyBridge", account_data)
 
         if self.owner not in joined_members:
-            logger.debug(f'Inviting owner {self.owner} to control room {room_id}')
+            logger.debug(f"Inviting owner {self.owner} to control room {room_id}")
             await self.intent.invite_user(room_id, self.owner)
 
         self.room_id = room_id
@@ -116,7 +117,21 @@ class ControlRoom:
         await self.send_message(HELP_TEXT)
 
     async def send_arguments(self, content):
-        await self.send_message("Nah, not implemented that yet!")
+        sig = signature(ContentGenerator.generate_content)
+        parameters = {
+            k: p
+            for k, p in sig.parameters.items()
+            if k not in ("self", "appservice", "owner")
+        }
+
+        lines = ["Available arguments & defaults:"]
+        for key, parameter in parameters.items():
+            annotation = parameter.annotation
+            if annotation is str:
+                annotation = "str"
+            lines.append(f"{key}: {annotation} = {parameter.default}")
+
+        await self.send_message("\n".join(lines))
 
     async def audit(self, content):
         await self.send_message("Running audit...")
@@ -165,8 +180,8 @@ class ControlRoom:
                 for bot_member in bot_members:
                     await self.intent.user(bot_member).leave_room(room_id)
                 await self.intent.leave_room(room_id)
+                await self.send_message(f"🚫 Removed all room members & left: {room_id}")
 
-            await self.send_message(f"🚫 Removed all room members & left: {room_id}")
         await self.send_message("✅ Cleanup complete!")
 
     async def generate(self, content):
