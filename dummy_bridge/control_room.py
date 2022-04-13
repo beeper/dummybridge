@@ -53,6 +53,7 @@ class ControlRoom:
             "help": self.send_help,
             "arguments": self.send_arguments,
             "audit": self.audit,
+            "cleanup": self.cleanup,
             "generate": self.generate,
         }
 
@@ -118,7 +119,9 @@ class ControlRoom:
         await self.send_message("Nah, not implemented that yet!")
 
     async def audit(self, content):
-        self.send_message("Running audit...")
+        await self.send_message("Running audit...")
+
+        found_dead_rooms = False
 
         lines = []
         room_ids = await self.intent.get_joined_rooms()
@@ -128,13 +131,43 @@ class ControlRoom:
                 member for member in joined_members
                 if member.startswith(f"@{self.user_prefix}")
             ]
+            real_member_count = len(joined_members) - len(bot_members)
+
             lines.append(
                 f"Room: {room_id} has {len(joined_members)} members "
                 f"({len(bot_members)} bots, "
-                f"{len(joined_members) - len(bot_members)} real users)"
+                f"{real_member_count} real users)"
             )
 
+            if not real_member_count:
+                found_dead_rooms = True
+
         await self.send_message("\n".join(lines))
+        if found_dead_rooms:
+            await self.send_message((
+                "Found rooms with no real users, "
+                "run cleanup to remove them!"
+            ))
+
+    async def cleanup(self, content):
+        await self.send_message("Starting cleanup...")
+
+        room_ids = await self.intent.get_joined_rooms()
+        for room_id in room_ids:
+            joined_members = await self.intent.get_joined_members(room_id)
+            bot_members = [
+                member for member in joined_members
+                if member.startswith(f"@{self.user_prefix}")
+            ]
+            real_member_count = len(joined_members) - len(bot_members)
+
+            if not real_member_count:
+                for bot_member in bot_members:
+                    await self.intent.user(bot_member).leave_room(room_id)
+                await self.intent.leave_room(room_id)
+
+            await self.send_message(f"🚫 Removed all room members & left: {room_id}")
+        await self.send_message("✅ Cleanup complete!")
 
     async def generate(self, content):
         bits = content.split()[1:]
