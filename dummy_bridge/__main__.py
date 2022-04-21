@@ -26,6 +26,7 @@ async def async_main(registration_file, **kwargs):
 @click.option("--port", type=int, default=5000)
 @click.option("--host", default="127.0.0.1")
 @click.option("--domain")
+@click.option("--use-websocket", is_flag=True)
 def main(*args, **kwargs):
     asyncio.run(async_main(*args, **kwargs))
 

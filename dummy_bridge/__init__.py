@@ -1,18 +1,23 @@
+import asyncio
+import json
 import logging
 import re
-
 from urllib.parse import urlparse
 
+import aiohttp
 from mautrix.api import HTTPAPI
 from mautrix.appservice import AppService
 from mautrix.appservice.state_store import ASStateStore
 from mautrix.client.api import ClientAPI
 from mautrix.client.state_store.memory import MemoryStateStore
-from mautrix.types import UserID
+from mautrix.types import Event, UserID
+from mautrix.util.bridge_state import BridgeState, BridgeStateEvent, GlobalBridgeState
 
 from .control_room import ControlRoom
 from .generate import ContentGenerator
 
+WEBSOCKET_PING_INTERVAL = 5
+WEBSOCKET_MAX_RECONNECT_DELAY = 60
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,9 @@ class DummyBridge:
         )
         self.control_room_id = await self.control_room.bootstrap()
 
+        if self.use_websocket:
+            asyncio.create_task(self.start_websocket_loop())
+
     async def on_event(self, event):
         if event.room_id == self.control_room_id:
             await self.control_room.on_event(event)
@@ -93,3 +101,67 @@ class DummyBridge:
                 "Received event for non control room: "
                 f"roomId={event.room_id} eventId={event.event_id}",
             )
+
+    async def handle_websocket_message(self, ws, message):
+        data = json.loads(message.data)
+        command = data.get("command")
+
+        if command == "transaction":
+            for event in data["events"]:
+                await self.on_event(Event.deserialize(event))
+        elif command == "ping":
+            state_response = GlobalBridgeState(
+                remote_states={},
+                bridge_state=BridgeState(state_event=BridgeStateEvent.UNCONFIGURED),
+            )
+
+            pong = {
+                "id": data["id"],
+                "command": "response",
+                "data": state_response.serialize(),
+            }
+
+            await ws.send_json(pong)
+        else:
+            logger.warning(f"Unknown websocket command: {command}")
+
+    async def read_websocket_messages(self, ws):
+        async for message in ws:
+            try:
+                await self.handle_websocket_message(ws, message)
+            except Exception as e:
+                logger.critical(f"Fatal error handling websocket message: {message}")
+                logger.exception(e)
+
+    async def start_websocket_loop(self):
+        read_messages_task = None
+        delay = 1
+
+        while True:
+            async with aiohttp.ClientSession() as session:
+                try:
+                    async with session.ws_connect(
+                        f"{self.homeserver}/_matrix/client/unstable/fi.mau.as_sync",
+                        headers={
+                            "Authorization": f"Bearer {self.registration['as_token']}",
+                            "X-Mautrix-Process-ID": "DummyBridge",
+                        },
+                    ) as ws:
+                        delay = 1
+                        read_messages_task = asyncio.create_task(self.read_websocket_messages(ws))
+
+                        while True:
+                            await asyncio.sleep(WEBSOCKET_PING_INTERVAL)
+                            await ws.ping()
+                except Exception as e:
+                    logger.critical(
+                        f"Fatal error with websocket connection, reconnecting in {delay}s...",
+                    )
+                    logger.exception(e)
+                    if read_messages_task:
+                        read_messages_task.cancel()
+
+                    await asyncio.sleep(delay)
+
+                    delay *= 2
+                    delay = min(delay, WEBSOCKET_MAX_RECONNECT_DELAY)
