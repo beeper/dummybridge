@@ -1,19 +1,18 @@
-import logging
 import json
+import logging
 from inspect import signature
 
 from mautrix.appservice import AppService, IntentAPI
 from mautrix.errors import MNotFound
-from mautrix.types import EventType, UserID, MessageType, TextMessageEventContent
+from mautrix.types import EventType, MessageType, TextMessageEventContent, UserID
 
 from .generate import ContentGenerator
-
 
 logger = logging.getLogger(__name__)
 
 
 HELP_TEXT = """
-👋 Hello, DummyBridge at your service! The following commands are available:
+👋 Hello, {name} at your service! The following commands are available:
 
 help: show this help text!
 generate: generate fake rooms, users and messages
@@ -42,12 +41,14 @@ class ControlRoom:
         appservice: AppService,
         owner: UserID,
         user_prefix: str,
+        use_websocket: bool,
         generator: ContentGenerator,
     ):
         self.appservice = appservice
         self.intent = appservice.intent
         self.owner = owner
         self.user_prefix = user_prefix
+        self.use_websocket = use_websocket
         self.generator = generator
 
         self.command_map = {
@@ -58,13 +59,17 @@ class ControlRoom:
             "generate": self.generate,
         }
 
+    @property
+    def name(self):
+        return "DummyBridgeWS" if self.use_websocket else "DummyBridge"
+
     async def bootstrap(self):
         account_data = {
             "control_room_id": None,
         }
 
         try:
-            account_data = await self.intent.get_account_data("DummyBridge")
+            account_data = await self.intent.get_account_data(self.name)
         except MNotFound:
             pass
 
@@ -72,14 +77,14 @@ class ControlRoom:
         joined_members = []
 
         if room_id:
-            logger.debug(f'Using existing control room {room_id}')
+            logger.debug(f"Using existing control room {room_id}")
             joined_members = await self.intent.get_joined_members(room_id)
         else:
             logger.debug("Creating new control room")
-            room_id = await self.intent.create_room(name="DummyBridge Control")
+            room_id = await self.intent.create_room(name=f"{self.name} Control")
             await self.intent.join_room(room_id)
             account_data["control_room_id"] = room_id
-            await self.intent.set_account_data("DummyBridge", account_data)
+            await self.intent.set_account_data(self.name, account_data)
 
         if self.owner not in joined_members:
             logger.debug(f"Inviting owner {self.owner} to control room {room_id}")
@@ -114,14 +119,12 @@ class ControlRoom:
         )
 
     async def send_help(self, content):
-        await self.send_message(HELP_TEXT)
+        await self.send_message(HELP_TEXT.format(name=self.name))
 
     async def send_arguments(self, content):
         sig = signature(ContentGenerator.generate_content)
         parameters = {
-            k: p
-            for k, p in sig.parameters.items()
-            if k not in ("self", "appservice", "owner")
+            k: p for k, p in sig.parameters.items() if k not in ("self", "appservice", "owner")
         }
 
         lines = ["Available arguments & defaults:"]
@@ -143,15 +146,14 @@ class ControlRoom:
         for room_id in room_ids:
             joined_members = await self.intent.get_joined_members(room_id)
             bot_members = [
-                member for member in joined_members
-                if member.startswith(f"@{self.user_prefix}")
+                member for member in joined_members if member.startswith(f"@{self.user_prefix}")
             ]
             real_member_count = len(joined_members) - len(bot_members)
 
             lines.append(
                 f"Room: {room_id} has {len(joined_members)} members "
                 f"({len(bot_members)} bots, "
-                f"{real_member_count} real users)"
+                f"{real_member_count} real users)",
             )
 
             if not real_member_count:
@@ -159,10 +161,9 @@ class ControlRoom:
 
         await self.send_message("\n".join(lines))
         if found_dead_rooms:
-            await self.send_message((
-                "Found rooms with no real users, "
-                "run cleanup to remove them!"
-            ))
+            await self.send_message(
+                ("Found rooms with no real users, " "run cleanup to remove them!")
+            )
 
     async def cleanup(self, content):
         await self.send_message("Starting cleanup...")
@@ -171,8 +172,7 @@ class ControlRoom:
         for room_id in room_ids:
             joined_members = await self.intent.get_joined_members(room_id)
             bot_members = [
-                member for member in joined_members
-                if member.startswith(f"@{self.user_prefix}")
+                member for member in joined_members if member.startswith(f"@{self.user_prefix}")
             ]
             real_member_count = len(joined_members) - len(bot_members)
 

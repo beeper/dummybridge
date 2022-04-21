@@ -89,11 +89,13 @@ class DummyBridge:
             appservice=self.appservice,
             owner=self.owner,
             user_prefix=self.user_prefix,
+            use_websocket=self.use_websocket,
             generator=generator,
         )
         self.control_room_id = await self.control_room.bootstrap()
 
         if self.use_websocket:
+            logger.debug("Starting websocket loop...")
             asyncio.create_task(self.websocket_handler.start_websocket_loop())
 
     async def on_event(self, event):
