@@ -1,22 +1,19 @@
 import asyncio
 import hashlib
 import random
-
 from collections import deque
 from string import ascii_letters
-from typing import Optional
 
 import aiohttp
-
 from faker import Faker
 from mautrix.appservice import AppService
 from mautrix.types import (
     EventType,
-    UserID,
-    MediaMessageEventContent,
-    TextMessageEventContent,
-    MessageType,
     ImageInfo,
+    MediaMessageEventContent,
+    MessageType,
+    TextMessageEventContent,
+    UserID,
 )
 
 
@@ -48,8 +45,8 @@ class ContentGenerator:
     async def generate_image_message(
         self,
         appservice: AppService,
-        async_media_delay: Optional[int] = None,
-        image_size: Optional[int] = None,
+        async_media_delay: int | None = None,
+        image_size: int | None = None,
     ):
         image_size = image_size or 128
         image_bytes = await _generate_random_image(size=image_size)
@@ -64,6 +61,7 @@ class ContentGenerator:
                     mime_type="image/png",
                     mxc=mxc,
                 )
+
             asyncio.create_task(_wait_then_upload())
         else:
             mxc = await appservice.intent.upload_media(
@@ -96,9 +94,9 @@ class ContentGenerator:
         room_id: str = None,
         messages: int = 1,
         message_type: str = "text",
-        users: Optional[int] = None,
-        async_media_delay: Optional[int] = None,
-        image_size: Optional[int] = None,
+        users: int | None = None,
+        async_media_delay: int | None = None,
+        image_size: int | None = None,
     ):
         if room_id is None and users is None:
             users = 1
@@ -113,7 +111,8 @@ class ContentGenerator:
 
             existing_userids = await appservice.intent.get_joined_members(room_id)
             userids = [
-                userid for userid in existing_userids
+                userid
+                for userid in existing_userids
                 if userid.startswith(f"@{self.user_prefix}")
                 and not userid.startswith(f"@{self.user_prefix}bot")
             ]
@@ -127,12 +126,14 @@ class ContentGenerator:
         if message_type == "text":
             generator = self.generate_text_message
         elif message_type == "image":
+
             async def generator():
                 return await self.generate_image_message(
                     appservice=appservice,
                     async_media_delay=async_media_delay,
                     image_size=image_size,
                 )
+
         else:
             raise ValueError(f"Invalid `message_type`: {message_type}")
 

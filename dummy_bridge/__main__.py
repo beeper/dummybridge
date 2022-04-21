@@ -1,33 +1,20 @@
 import asyncio
-import click
 import json
 import logging
+
+import click
 
 from . import DummyBridge
 
 
-async def async_main(
-    homeserver,
-    owner,
-    registration_file,
-    port,
-    host,
-    domain,
-):
+async def async_main(registration_file, **kwargs):
     logging.basicConfig(level=logging.WARNING)
     logging.getLogger("dummy_bridge").setLevel(level=logging.TRACE)
 
     with open(registration_file, "r") as f:
         registration = json.load(f)
 
-    bridge = DummyBridge(
-        homeserver_url=homeserver,
-        registration=registration,
-        owner=owner,
-        listen_host=host,
-        listen_port=port,
-        domain=domain,
-    )
+    bridge = DummyBridge(registration=registration, **kwargs)
     await bridge.bootstrap()
     await asyncio.Event().wait()
 

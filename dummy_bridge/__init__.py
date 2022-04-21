@@ -1,7 +1,6 @@
 import logging
 import re
 
-from typing import Optional
 from urllib.parse import urlparse
 
 from mautrix.api import HTTPAPI
@@ -30,32 +29,35 @@ class DummyBridge:
 
     def __init__(
         self,
-        homeserver_url: str,
+        homeserver: str,
         registration: dict[str, str],
         owner: UserID,
-        listen_host: str = "127.0.0.1",
-        listen_port: int = 5000,
-        domain: Optional[str] = None,
+        host: str = "127.0.0.1",
+        port: int = 5000,
+        domain: str | None = None,
+        use_websocket: bool = False,
     ):
-        self.listen_host = listen_host
-        self.listen_port = listen_port
-
+        self.host = host
+        self.port = port
         self.owner = owner
+        self.use_websocket = use_websocket
+        self.homeserver = homeserver
+        self.registration = registration
 
         user_regex = registration["namespaces"]["users"][0]["regex"].replace("\\", "")
         matches = re.match(r"^@(.+)\.\+\:(.+)$", user_regex)
         self.user_prefix = matches.group(1)
         self.user_domain = matches.group(2)
 
-        self.api = HTTPAPI(base_url=homeserver_url, token=registration["as_token"])
+        self.api = HTTPAPI(base_url=homeserver, token=registration["as_token"])
 
         if not domain:
-            domain = urlparse(homeserver_url).netloc
+            domain = urlparse(homeserver).netloc
 
         self.appservice = AppService(
             id=registration["id"],
-            domain=domain or homeserver_url,
-            server=homeserver_url,
+            domain=domain or homeserver,
+            server=homeserver,
             as_token=registration["as_token"],
             hs_token=registration["hs_token"],
             bot_localpart=registration["sender_localpart"],
@@ -64,13 +66,13 @@ class DummyBridge:
         self.appservice.matrix_event_handler(self.on_event)
 
     async def bootstrap(self):
-        logger.debug('Bootstrap DummyBridge')
+        logger.debug("Bootstrap DummyBridge")
 
         # Populate the workaround hack for r0 -> v3 endpoint rewriting
         client_api = ClientAPI(api=self.api)
         await client_api.versions()
 
-        await self.appservice.start(host=self.listen_host, port=self.listen_port)
+        await self.appservice.start(host=self.host, port=self.port)
         await self.appservice.intent.ensure_registered()
 
         generator = ContentGenerator(self.user_prefix, self.user_domain)
@@ -89,5 +91,5 @@ class DummyBridge:
         else:
             logger.warning(
                 "Received event for non control room: "
-                f"roomId={event.room_id} eventId={event.event_id}"
+                f"roomId={event.room_id} eventId={event.event_id}",
             )
