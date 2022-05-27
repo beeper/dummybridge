@@ -1,8 +1,8 @@
 import asyncio
-import json
 import logging
 
 import click
+import yaml
 
 from . import DummyBridge
 
@@ -12,7 +12,7 @@ async def async_main(registration_file, **kwargs):
     logging.getLogger("dummy_bridge").setLevel(level=logging.TRACE)
 
     with open(registration_file, "r") as f:
-        registration = json.load(f)
+        registration = yaml.safe_load(f)
 
     bridge = DummyBridge(registration=registration, **kwargs)
     await bridge.bootstrap()
