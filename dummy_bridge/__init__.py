@@ -12,6 +12,7 @@ from mautrix.types import UserID
 
 from .control_room import ControlRoom
 from .generate import ContentGenerator
+from .message_send_status import MessageSendStatusHandler
 from .websocket import WebSocketHandler
 
 logger = logging.getLogger(__name__)
@@ -77,22 +78,29 @@ class DummyBridge:
         logger.debug("Bootstrap DummyBridge")
 
         # Populate the workaround hack for r0 -> v3 endpoint rewriting
-        client_api = ClientAPI(api=self.api)
-        await client_api.versions()
+        self.client_api = ClientAPI(api=self.api)
+        await self.client_api.versions()
 
         await self.appservice.start(host=self.host, port=self.port)
         await self.appservice.intent.ensure_registered()
 
-        generator = ContentGenerator(self.user_prefix, self.user_domain)
+        self.generator = ContentGenerator(self.user_prefix, self.user_domain)
 
         self.control_room = ControlRoom(
             appservice=self.appservice,
             owner=self.owner,
             user_prefix=self.user_prefix,
             use_websocket=self.use_websocket,
-            generator=generator,
+            generator=self.generator,
         )
         self.control_room_id = await self.control_room.bootstrap()
+
+        self.message_send_status = MessageSendStatusHandler(
+            appservice=self.appservice,
+            owner=self.owner,
+            generator=self.generator,
+            client_api=self.client_api,
+        )
 
         if self.use_websocket:
             logger.debug("Starting websocket loop...")
@@ -102,7 +110,8 @@ class DummyBridge:
         if event.room_id == self.control_room_id:
             await self.control_room.on_event(event)
         else:
-            logger.warning(
+            logger.info(
                 "Received event for non control room: "
                 f"roomId={event.room_id} eventId={event.event_id}",
             )
+            await self.message_send_status.handle_event(event)

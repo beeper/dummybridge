@@ -162,7 +162,7 @@ class ControlRoom:
         await self.send_message("\n".join(lines))
         if found_dead_rooms:
             await self.send_message(
-                ("Found rooms with no real users, " "run cleanup to remove them!")
+                "Found rooms with no real users, run cleanup to remove them!"
             )
 
     async def cleanup(self, content):
