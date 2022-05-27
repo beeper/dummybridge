@@ -1,11 +1,36 @@
 build:
+  stage: build
   image: docker:latest
   services:
     - docker:dind
   before_script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
   script:
-    - docker pull CI_REGISTRY_IMAGE:latest || true
+    - docker pull $CI_REGISTRY_IMAGE:latest || true
     - docker build --pull --cache-from $CI_REGISTRY_IMAGE:latest --tag $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA .
     - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
     - if [ $CI_COMMIT_BRANCH == "main" ]; then docker tag $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA $CI_REGISTRY_IMAGE:latest && docker push $CI_REGISTRY_IMAGE:latest; fi
+  after_script:
+  - |
+    if [[ "$CI_COMMIT_BRANCH" == "main" && "$CI_JOB_STATUS" == "success" ]]; then
+      apk add --update curl jq
+      rm -rf /var/cache/apk/*
+
+      jq -n '
+         {
+           password:  env.BEEPER_DEV_ADMIN_NIGHTLY_PASS,
+           bridge:    env.BEEPER_BRIDGE_TYPE,
+           image:     "\(env.CI_REGISTRY_IMAGE):\(env.CI_COMMIT_SHA)",
+           channel:   "STABLE"
+         }
+        ' | curl "$BEEPER_DEV_ADMIN_API_URL" -H "Content-Type: application/json" -d @-
+
+      jq -n '
+         {
+           password:  env.BEEPER_DEV_ADMIN_NIGHTLY_PASS,
+           bridge:    env.BEEPER_BRIDGE_TYPE,
+           image:     "\(env.CI_REGISTRY_IMAGE):\(env.CI_COMMIT_SHA)",
+           channel:   "NIGHTLY"
+         }
+        ' | curl "$BEEPER_DEV_ADMIN_API_URL" -H "Content-Type: application/json" -d @-
+    fi
