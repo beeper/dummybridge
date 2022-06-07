@@ -162,7 +162,7 @@ class ControlRoom:
         await self.send_message("\n".join(lines))
         if found_dead_rooms:
             await self.send_message(
-                "Found rooms with no real users, run cleanup to remove them!"
+                "Found rooms with no real users, run cleanup to remove them!",
             )
 
     async def cleanup(self, content):
@@ -185,23 +185,27 @@ class ControlRoom:
         await self.send_message("✅ Cleanup complete!")
 
     async def generate(self, content):
-        bits = content.split()[1:]
-        kwargs = {}
+        try:
+            kwargs = json.loads(content.split(None, 1)[1])
+        except json.JSONDecodeError:
+            bits = content.split()[1:]
+            kwargs = {}
 
-        for bit in bits:
-            try:
-                key, value = bit.split("=", 1)
-            except ValueError:
-                await self.send_message(f"Invalid argument: {bit}")
-                return
-            else:
+            for bit in bits:
                 try:
-                    value = json.loads(value)
-                except Exception:
-                    pass
-                kwargs[key] = value
+                    key, value = bit.split("=", 1)
+                except ValueError:
+                    await self.send_message(f"Invalid argument: {bit}")
+                    return
+                else:
+                    try:
+                        value = json.loads(value)
+                    except Exception:
+                        pass
+                    kwargs[key] = value
 
-        await self.send_message(f"⏳ Generating with arguments: {kwargs}")
+        arguments = "\n".join([f"{key} = {value}" for key, value in kwargs.items()])
+        await self.send_message(f"⏳ Generating with arguments:\n{arguments}")
         try:
             await self.generator.generate_content(
                 appservice=self.appservice,
