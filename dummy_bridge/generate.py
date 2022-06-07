@@ -103,12 +103,23 @@ class ContentGenerator:
 
     async def generate_text_message(
         self,
+        appservice: AppService,
+        room_id: str,
         message_text: str | None = None,
+        reply_to_event_id: str | None = None,
     ):
-        return TextMessageEventContent(
+        if reply_to_event_id:
+            target_event = await appservice.intent.get_event(room_id, reply_to_event_id)
+
+        msg = TextMessageEventContent(
             msgtype=MessageType.TEXT,
             body=message_text or self.faker.sentence(),
         )
+
+        if reply_to_event_id:
+            msg.set_reply(target_event)
+
+        return msg
 
     async def generate_content(
         self,
@@ -125,9 +136,19 @@ class ContentGenerator:
         async_media_delay: int | None = None,
         image_size: int | None = None,
         image_category: str | None = None,
+        reply_to_event_id: str | None = None,
     ):
-        if room_id is None and users is None:
-            users = 1
+        if room_id is None:
+            if users is None:
+                users = 1
+            else:
+                raise ValueError("Must provide `room_id` when users is set to 0!")
+
+        if reply_to_event_id is not None:
+            if not room_id:
+                raise ValueError("Must provide `room_id` when `reply_to_event_id` is set!")
+            if messages > 1:
+                raise ValueError("Must not specify >1 messages when `reply_to_event_id` is set!")
 
         if users:
             userids = [self.generate_userid() for user in range(users)]
@@ -140,9 +161,6 @@ class ContentGenerator:
                 await appservice.intent.user(userid).set_displayname(self.faker.name())
                 await appservice.intent.user(userid).set_avatar_url(avatar_mxc)
         else:
-            if not room_id:
-                raise ValueError("Must provide `room_id` when users is set to 0!")
-
             existing_userids = await appservice.intent.get_joined_members(room_id)
             userids = [
                 userid
@@ -162,7 +180,12 @@ class ContentGenerator:
         if message_type == "text":
 
             async def generator():
-                return await self.generate_text_message(message_text=message_text)
+                return await self.generate_text_message(
+                    appservice=appservice,
+                    room_id=room_id,
+                    message_text=message_text,
+                    reply_to_event_id=reply_to_event_id,
+                )
 
         elif message_type == "image":
 
