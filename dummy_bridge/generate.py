@@ -1,8 +1,5 @@
 import asyncio
-import hashlib
-import random
 from collections import deque
-from string import ascii_letters
 
 import aiohttp
 from faker import Faker
@@ -17,19 +14,21 @@ from mautrix.types import (
 )
 
 
-async def _generate_random_image(size):
-    """
-    Generate a random PNG... using Gravatar (why not).
-    """
-
-    rnd = "".join(random.choice(ascii_letters) for _ in range(24))
-    md5 = hashlib.md5(rnd.encode()).hexdigest()
-    image_url = f"https://gravatar.com/avatar/{md5}?d=identicon&s={size}"
+async def _download_image(image_url: str) -> bytes:
     async with aiohttp.ClientSession() as session:
         async with session.get(image_url) as response:
             content = await response.read()
 
     return content
+
+
+async def _generate_random_image(size: int, category: str) -> bytes:
+    """
+    Get a random image from unsplash.
+    """
+
+    image_url = f"https://source.unsplash.com/random/{size}x{size}?{category}"
+    return await _download_image(image_url)
 
 
 class ContentGenerator:
@@ -42,14 +41,19 @@ class ContentGenerator:
         user_name = self.faker.user_name()
         return UserID(f"@{self.user_prefix}{user_name}:{self.user_domain}")
 
-    async def generate_image_message(
+    async def download_and_upload_image(
         self,
         appservice: AppService,
         async_media_delay: int | None = None,
         image_size: int | None = None,
+        image_category: str | None = None,
+        image_url: str | None = None,
     ):
-        image_size = image_size or 128
-        image_bytes = await _generate_random_image(size=image_size)
+        if image_url:
+            image_bytes = await _download_image(image_url)
+        else:
+            image_size = image_size or 128
+            image_bytes = await _generate_random_image(size=image_size, category=image_category)
 
         if async_media_delay:
             mxc = await appservice.intent.unstable_create_mxc()
@@ -69,6 +73,22 @@ class ContentGenerator:
                 mime_type="image/png",
             )
 
+        return mxc, image_bytes
+
+    async def generate_image_message(
+        self,
+        appservice: AppService,
+        async_media_delay: int | None = None,
+        image_size: int | None = None,
+        image_category: str | None = None,
+    ):
+        mxc, image_bytes = await self.download_and_upload_image(
+            appservice=appservice,
+            async_media_delay=async_media_delay,
+            image_size=image_size,
+            image_category=image_category,
+        )
+
         return MediaMessageEventContent(
             msgtype=MessageType.IMAGE,
             url=mxc,
@@ -81,10 +101,13 @@ class ContentGenerator:
             ),
         )
 
-    async def generate_text_message(self):
+    async def generate_text_message(
+        self,
+        message_text: str | None = None,
+    ):
         return TextMessageEventContent(
             msgtype=MessageType.TEXT,
-            body=self.faker.sentence(),
+            body=message_text or self.faker.sentence(),
         )
 
     async def generate_content(
@@ -92,11 +115,16 @@ class ContentGenerator:
         appservice: AppService,
         owner: str,
         room_id: str = None,
+        room_name: str | None = None,
         messages: int = 1,
         message_type: str = "text",
+        message_text: str | None = None,
         users: int | None = None,
+        user_displayname: str | None = None,
+        user_avatarurl: str | None = None,
         async_media_delay: int | None = None,
         image_size: int | None = None,
+        image_category: str | None = None,
     ):
         if room_id is None and users is None:
             users = 1
@@ -104,7 +132,13 @@ class ContentGenerator:
         if users:
             userids = [self.generate_userid() for user in range(users)]
             for userid in userids:
+                avatar_mxc, _ = await self.download_and_upload_image(
+                    appservice=appservice,
+                    image_url=user_avatarurl,
+                )
                 await appservice.intent.user(userid).ensure_registered()
+                await appservice.intent.user(userid).set_displayname(self.faker.name())
+                await appservice.intent.user(userid).set_avatar_url(avatar_mxc)
         else:
             if not room_id:
                 raise ValueError("Must provide `room_id` when users is set to 0!")
@@ -118,13 +152,18 @@ class ContentGenerator:
             ]
 
         if not room_id:
-            room_id = await appservice.intent.create_room(name=self.faker.sentence())
+            room_id = await appservice.intent.create_room(
+                name=room_name or self.faker.sentence(),
+            )
             await appservice.intent.invite_user(room_id, owner)
 
         userids = deque(userids)
 
         if message_type == "text":
-            generator = self.generate_text_message
+
+            async def generator():
+                return await self.generate_text_message(message_text=message_text)
+
         elif message_type == "image":
 
             async def generator():
@@ -132,6 +171,7 @@ class ContentGenerator:
                     appservice=appservice,
                     async_media_delay=async_media_delay,
                     image_size=image_size,
+                    image_category=image_category,
                 )
 
         else:
