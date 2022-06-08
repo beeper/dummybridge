@@ -13,6 +13,8 @@ from mautrix.types import (
     UserID,
 )
 
+StateBridge = EventType.find("m.bridge", EventType.Class.STATE)
+
 
 async def _download_image(image_url: str) -> bytes:
     async with aiohttp.ClientSession() as session:
@@ -147,6 +149,7 @@ class ContentGenerator:
         image_size: int | None = None,
         image_category: str | None = None,
         reply_to_event_id: str | None = None,
+        bridge_name: str = "dummybridge",
     ) -> None:
         # TODO: this function is a total mess now, probably be good to separate it into a few
         # sub-commands like?:
@@ -195,8 +198,17 @@ class ContentGenerator:
             ]
 
         if not room_id:
+            initial_state = [
+                {
+                    "type": str(StateBridge),
+                    "state_key": "i.am.a.bridge",
+                    "content": {"protocol": {"id": bridge_name}},
+                },
+            ]
+
             room_id = await appservice.intent.create_room(
                 name=room_name or self.faker.sentence(),
+                initial_state=initial_state,
             )
             await appservice.intent.invite_user(room_id, owner)
 
