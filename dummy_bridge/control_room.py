@@ -187,7 +187,7 @@ class ControlRoom:
     async def generate(self, content):
         try:
             kwargs = json.loads(content.split(None, 1)[1])
-        except json.JSONDecodeError:
+        except (IndexError, json.JSONDecodeError):
             bits = content.split()[1:]
             kwargs = {}
 
