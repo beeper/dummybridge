@@ -121,6 +121,16 @@ class ContentGenerator:
 
         return msg
 
+    async def generate_reaction_event(
+        self,
+        appservice: AppService,
+        user_id: str,
+        room_id: str,
+        message_text: str,
+        reply_to_event_id: str,
+    ):
+        await appservice.intent.user(user_id).react(room_id, reply_to_event_id, message_text)
+
     async def generate_content(
         self,
         appservice: AppService,
@@ -137,7 +147,14 @@ class ContentGenerator:
         image_size: int | None = None,
         image_category: str | None = None,
         reply_to_event_id: str | None = None,
-    ):
+    ) -> None:
+        # TODO: this function is a total mess now, probably be good to separate it into a few
+        # sub-commands like?:
+        # generate room
+        # generate reply
+        # generate reaction
+        # etc, etc
+
         if room_id is None:
             if users is None:
                 users = 1
@@ -149,6 +166,14 @@ class ContentGenerator:
                 raise ValueError("Must provide `room_id` when `reply_to_event_id` is set!")
             if messages > 1:
                 raise ValueError("Must not specify >1 messages when `reply_to_event_id` is set!")
+
+        if message_type == "reaction":
+            if not reply_to_event_id:
+                raise ValueError(
+                    "Must specify `reply_to_event_id` when `message_type` is reaction!",
+                )
+            if not message_text:
+                raise ValueError("Must specify `message_text` when `message_type` is reaction!")
 
         if users:
             userids = [self.generate_userid() for user in range(users)]
@@ -176,6 +201,16 @@ class ContentGenerator:
             await appservice.intent.invite_user(room_id, owner)
 
         userids = deque(userids)
+
+        if message_type == "reaction":
+            await self.generate_reaction_event(
+                appservice=appservice,
+                user_id=userids[0],
+                room_id=room_id,
+                message_text=message_text,
+                reply_to_event_id=reply_to_event_id,
+            )
+            return
 
         if message_type == "text":
 
