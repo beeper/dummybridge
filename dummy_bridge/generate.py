@@ -186,7 +186,9 @@ class ContentGenerator:
                     image_url=user_avatarurl,
                 )
                 await appservice.intent.user(userid).ensure_registered()
-                await appservice.intent.user(userid).set_displayname(self.faker.name())
+                await appservice.intent.user(userid).set_displayname(
+                    user_displayname or self.faker.name(),
+                )
                 await appservice.intent.user(userid).set_avatar_url(avatar_mxc)
         else:
             existing_userids = await appservice.intent.get_joined_members(room_id)
