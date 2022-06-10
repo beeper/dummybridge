@@ -1,3 +1,5 @@
+import asyncio
+
 from mautrix.appservice.appservice import AppService
 from mautrix.client.api.client import ClientAPI
 from mautrix.types import EventType, RelatesTo, RelationType, UserID
@@ -27,6 +29,7 @@ All other messages will be responded to with a <code>com.beeper.message_send_sta
 event.<br>
 To prevent a status event from being sent for a given message, include the text "nostatus" in the
 message.<br>
+To make the bridge send the status late, include the text "latestatus" in the message.<br>
 By default, the message send status events will have success of <code>true</code>. However, if the
 message contains the text "fail" then it will have success of <code>false</code>.<br>
 If the message includes the text "noretry", then the status event will indicate that the failure
@@ -72,6 +75,9 @@ class MessageSendStatusHandler:
 
         if "nostatus" in event.content.body:
             return
+
+        if "latestatus" in event.content.body:
+            await asyncio.sleep(15)
 
         message_send_status_content = {
             "network": "dummybridge",
