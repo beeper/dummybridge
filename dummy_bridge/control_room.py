@@ -81,7 +81,12 @@ class ControlRoom:
             joined_members = await self.intent.get_joined_members(room_id)
         else:
             logger.debug("Creating new control room")
-            room_id = await self.intent.create_room(name=f"{self.name} Control")
+            room_id = await self.intent.create_room(
+                name=f"{self.name} Control",
+                creation_content={
+                    "m.federate": False,
+                },
+            )
             await self.intent.join_room(room_id)
             account_data["control_room_id"] = room_id
             await self.intent.set_account_data(self.name, account_data)

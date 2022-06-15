@@ -211,6 +211,9 @@ class ContentGenerator:
             room_id = await appservice.intent.create_room(
                 name=room_name or self.faker.sentence(),
                 initial_state=initial_state,
+                creation_content={
+                    "m.federate": False,
+                },
             )
             await appservice.intent.invite_user(room_id, owner)
 
