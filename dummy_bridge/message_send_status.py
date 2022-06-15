@@ -34,7 +34,8 @@ By default, the message send status events will have success of <code>true</code
 message contains the text "fail" then it will have success of <code>false</code>.<br>
 If the message includes the text "noretry", then the status event will indicate that the failure
 cannot be retried, and if the text "notcertain" is present, then the status event will indicate that
-it is not certain that the event failed to bridge.
+it is not certain that the event failed to bridge.<br>
+The same rules apply for redactions, just put the text in the redaction reason.
 """.strip()
 
 
@@ -54,29 +55,35 @@ class MessageSendStatusHandler:
     async def handle_event(self, event):
         if event.sender != self.owner:
             return
-        if event.type != EventType.ROOM_MESSAGE:
+
+        if event.type not in (EventType.ROOM_MESSAGE, EventType.ROOM_REDACTION):
             return
 
-        if event.content.body.startswith("!generate"):
-            try:
-                kwargs = parse_args(event.content.body.removeprefix("!generate"))
-            except Exception as e:
-                await self.client_api.send_text(
-                    event.room_id, f"Invalid arguments to generate. Type '!help' for usage. {e}"
+        check_text = (
+            event.content.body if event.type == EventType.ROOM_MESSAGE else event.content.reason
+        ) or ""
+
+        if event.type != EventType.ROOM_MESSAGE:
+            if check_text.startswith("!generate"):
+                try:
+                    kwargs = parse_args(check_text.removeprefix("!generate"))
+                except Exception as e:
+                    await self.client_api.send_text(
+                        event.room_id, f"Invalid arguments to generate. Type '!help' for usage. {e}"
+                    )
+                    return
+                await self.generator.generate_content(
+                    self.appservice, self.owner, room_id=event.room_id, **kwargs
                 )
                 return
-            await self.generator.generate_content(
-                self.appservice, self.owner, room_id=event.room_id, **kwargs
-            )
-            return
-        if event.content.body.startswith("!help"):
-            await self.client_api.send_notice(event.room_id, html=HELP_TEXT)
+            if check_text.startswith("!help"):
+                await self.client_api.send_notice(event.room_id, html=HELP_TEXT)
+                return
+
+        if "nostatus" in check_text:
             return
 
-        if "nostatus" in event.content.body:
-            return
-
-        if "latestatus" in event.content.body:
+        if "latestatus" in check_text:
             await asyncio.sleep(15)
 
         message_send_status_content = {
@@ -84,9 +91,9 @@ class MessageSendStatusHandler:
             "m.relates_to": RelatesTo(RelationType.REFERENCE, event.event_id).serialize(),
             "success": True,
         }
-        if "fail" in event.content.body:
-            no_retry = "noretry" in event.content.body
-            not_certain = "notcertain" in event.content.body
+        if "fail" in check_text:
+            no_retry = "noretry" in check_text
+            not_certain = "notcertain" in check_text
             message_send_status_content.update(
                 {
                     "success": False,
