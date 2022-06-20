@@ -62,11 +62,11 @@ class MessageSendStatusHandler:
 
         check_text = ""
         if event.type == EventType.ROOM_MESSAGE:
-            check_text = event.content.body
+            check_text = event.content.body or ""
         elif event.type == EventType.ROOM_REDACTION:
-            check_text = event.content.reason
+            check_text = event.content.reason or ""
         elif event.type == EventType.REACTION:
-            check_text = event.content._relates_to.key
+            check_text = event.content._relates_to.key or ""
 
         if check_text.startswith("!generate"):
             try:
