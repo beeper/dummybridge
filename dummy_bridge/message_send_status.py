@@ -68,22 +68,21 @@ class MessageSendStatusHandler:
         elif event.type == EventType.REACTION:
             check_text = event.content._relates_to.key
 
-        if event.type != EventType.ROOM_MESSAGE:
-            if check_text.startswith("!generate"):
-                try:
-                    kwargs = parse_args(check_text.removeprefix("!generate"))
-                except Exception as e:
-                    await self.client_api.send_text(
-                        event.room_id, f"Invalid arguments to generate. Type '!help' for usage. {e}"
-                    )
-                    return
-                await self.generator.generate_content(
-                    self.appservice, self.owner, room_id=event.room_id, **kwargs
+        if check_text.startswith("!generate"):
+            try:
+                kwargs = parse_args(check_text.removeprefix("!generate"))
+            except Exception as e:
+                await self.client_api.send_text(
+                    event.room_id, f"Invalid arguments to generate. Type '!help' for usage. {e}"
                 )
                 return
-            if check_text.startswith("!help"):
-                await self.client_api.send_notice(event.room_id, html=HELP_TEXT)
-                return
+            await self.generator.generate_content(
+                self.appservice, self.owner, room_id=event.room_id, **kwargs
+            )
+            return
+        if check_text.startswith("!help"):
+            await self.client_api.send_notice(event.room_id, html=HELP_TEXT)
+            return
 
         if "nostatus" in check_text or "❌" in check_text:
             return
