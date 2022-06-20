@@ -27,15 +27,16 @@ Generate 10 messages from 5 users (2 messages/user)</li>
 
 All other messages will be responded to with a <code>com.beeper.message_send_status</code>
 event.<br>
-To prevent a status event from being sent for a given message, include the text "nostatus" in the
-message.<br>
-To make the bridge send the status late, include the text "latestatus" in the message.<br>
+To prevent a status event from being sent for a given message, include the text "nostatus" or "❌"
+in the message.<br>
+To make the bridge send the status late, include the text "latestatus" or "⏲️" in the message.<br>
 By default, the message send status events will have success of <code>true</code>. However, if the
-message contains the text "fail" then it will have success of <code>false</code>.<br>
+message contains the text "fail" or "🔥" then it will have success of <code>false</code>.<br>
 If the message includes the text "noretry", then the status event will indicate that the failure
 cannot be retried, and if the text "notcertain" is present, then the status event will indicate that
 it is not certain that the event failed to bridge.<br>
-The same rules apply for redactions, just put the text in the redaction reason.
+The same rules apply for redactions (just put the text in the redaction reason) and reactions (just
+react with the corresponding emoji).
 """.strip()
 
 
@@ -84,10 +85,10 @@ class MessageSendStatusHandler:
                 await self.client_api.send_notice(event.room_id, html=HELP_TEXT)
                 return
 
-        if "nostatus" in check_text:
+        if "nostatus" in check_text or "❌" in check_text:
             return
 
-        if "latestatus" in check_text:
+        if "latestatus" in check_text or "⏲️" in check_text:
             await asyncio.sleep(15)
 
         message_send_status_content = {
@@ -95,7 +96,7 @@ class MessageSendStatusHandler:
             "m.relates_to": RelatesTo(RelationType.REFERENCE, event.event_id).serialize(),
             "success": True,
         }
-        if "fail" in check_text:
+        if "fail" in check_text or "🔥" in check_text:
             no_retry = "noretry" in check_text
             not_certain = "notcertain" in check_text
             message_send_status_content.update(
