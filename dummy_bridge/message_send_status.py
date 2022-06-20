@@ -56,12 +56,16 @@ class MessageSendStatusHandler:
         if event.sender != self.owner:
             return
 
-        if event.type not in (EventType.ROOM_MESSAGE, EventType.ROOM_REDACTION):
+        if event.type not in (EventType.ROOM_MESSAGE, EventType.ROOM_REDACTION, EventType.REACTION):
             return
 
-        check_text = (
-            event.content.body if event.type == EventType.ROOM_MESSAGE else event.content.reason
-        ) or ""
+        check_text = ""
+        if event.type == EventType.ROOM_MESSAGE:
+            check_text = event.content.body
+        elif event.type == EventType.ROOM_REDACTION:
+            check_text = event.content.reason
+        elif event.type == EventType.REACTION:
+            check_text = event.content._relates_to.key
 
         if event.type != EventType.ROOM_MESSAGE:
             if check_text.startswith("!generate"):
