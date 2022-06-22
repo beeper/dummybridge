@@ -1,10 +1,17 @@
+import asyncio
 import json
 import logging
 from inspect import signature
 
 from mautrix.appservice import AppService, IntentAPI
 from mautrix.errors import MNotFound
-from mautrix.types import EventType, MessageType, TextMessageEventContent, UserID
+from mautrix.types import (
+    EventType,
+    MessageType,
+    PaginationDirection,
+    TextMessageEventContent,
+    UserID,
+)
 
 from .generate import ContentGenerator
 
@@ -100,6 +107,15 @@ class ControlRoom:
 
     async def on_event(self, event):
         if event.type is EventType.ROOM_MESSAGE:
+            if event.content.msgtype == MessageType.FILE:
+                if event.content.info.mimetype != "text/tab-separated-values":
+                    await self.send_message(
+                        f"⚠️ I don't understand file format: " f"{event.content.info.mimetype}",
+                    )
+                    return
+                await self.generate_from_file(event.content.url)
+                return
+
             for command_prefix, handler in self.command_map.items():
                 if event.content.body.startswith(command_prefix):
                     await handler(event.content.body)
@@ -222,3 +238,110 @@ class ControlRoom:
             raise
         else:
             await self.send_message("✅ Generation complete, enjoy!")
+
+    async def generate_from_file(self, mxc: str):
+        contents = await self.intent.download_media(mxc)
+        contents = contents.decode()
+
+        lines = contents.splitlines()
+        headers = [h.lower().replace(" ", "-") for h in lines[0].split("\t")]
+        messages = [dict(zip(headers, line.split("\t"))) for line in lines[1:]]
+
+        # Row 1 is special and contains extras like room name / chat app
+        room_id, _, _ = await self.generator.generate_content(
+            appservice=self.appservice,
+            owner=self.owner,
+            messages=0,
+            bridge_name=messages[0]["chat-app"],
+            room_name=messages[0]["room-name"],
+        )
+
+        await self.send_message("🗂️ Created room...")
+
+        contact_to_user_id = {}
+
+        for message in messages:
+            contact = message["contact"]
+            if contact == "contact" or contact in contact_to_user_id:
+                continue
+
+            _, user_ids, _ = await self.generator.generate_content(
+                appservice=self.appservice,
+                owner=self.owner,
+                messages=0,
+                room_id=room_id,
+                users=1,
+                user_displayname=message["contact"],
+                user_avatarurl=message["avatar-url"],
+            )
+            print("USERS", user_ids)
+            contact_to_user_id[contact] = user_ids[0]
+
+        await self.send_message(f"🧑 Created {len(contact_to_user_id)} users...")
+
+        message_event_ids = {}
+
+        for i, message in enumerate(messages):
+            if message["contact"] == "sender":
+                await self.send_message(
+                    "First message is from sender, that's you!\n"
+                    "I'll wait here until you send a message in the new room",
+                )
+                while True:
+                    try:
+                        room_messages = await self.intent.get_messages(
+                            room_id=room_id,
+                            direction=PaginationDirection.BACKWARD,
+                            from_token="",
+                            filter_json={"types": [str(EventType.ROOM_MESSAGE)]},
+                        )
+                    except Exception as e:
+                        if "not in response" not in f"{e}":
+                            raise
+                        continue
+
+                    events = room_messages.events
+                    assert len(events) == 1, "You sent too many messages!"
+                    message_event_ids[message["message-id"]] = events[0].event_id
+                    if room_messages:
+                        break
+
+                    await asyncio.sleep(10)
+                continue
+
+            generator_kwargs = {
+                "room_id": room_id,
+                "user_ids": [contact_to_user_id[message["contact"]]],
+                "messages": 1,
+            }
+
+            message_type = message.get("message-type", "text")
+            reply_to_message_id = message.get("reply-to-message-id")
+
+            if message_type == "text":
+                generator_kwargs["message_text"] = message["content"]
+            elif message_type == "reaction":
+                generator_kwargs["message_type"] = "reaction"
+                generator_kwargs["message_text"] = message["content"]
+                assert (
+                    reply_to_message_id is not None
+                ), "Cannot have reaction without reply-to-message-id set"
+            elif message_type == "image":
+                generator_kwargs["message_type"] = "image"
+                generator_kwargs["image_url"] = message["content"]
+                pass
+            else:
+                raise ValueError(f"Invalid message-type: {message_type}")
+
+            if reply_to_message_id:
+                generator_kwargs["reply_to_event_id"] = message_event_ids[reply_to_message_id]
+
+            _, _, event_ids = await self.generator.generate_content(
+                appservice=self.appservice,
+                owner=self.owner,
+                **generator_kwargs,
+            )
+            message_event_ids[message["message-id"]] = event_ids[0]
+
+        await self.send_message(f"📩 Sent {len(message_event_ids)} messages...")
+        await self.send_message("✅ File generation complete, enjoy!")

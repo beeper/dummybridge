@@ -83,12 +83,14 @@ class ContentGenerator:
         async_media_delay: int | None = None,
         image_size: int | None = None,
         image_category: str | None = None,
+        image_url: str | None = None,
     ):
         mxc, image_bytes = await self.download_and_upload_image(
             appservice=appservice,
             async_media_delay=async_media_delay,
             image_size=image_size,
             image_category=image_category,
+            image_url=image_url,
         )
 
         return MediaMessageEventContent(
@@ -131,7 +133,11 @@ class ContentGenerator:
         message_text: str,
         reply_to_event_id: str,
     ):
-        await appservice.intent.user(user_id).react(room_id, reply_to_event_id, message_text)
+        return await appservice.intent.user(user_id).react(
+            room_id,
+            reply_to_event_id,
+            message_text,
+        )
 
     async def generate_content(
         self,
@@ -143,14 +149,16 @@ class ContentGenerator:
         message_type: str = "text",
         message_text: str | None = None,
         users: int | None = None,
+        user_ids: list[str] | None = None,
         user_displayname: str | None = None,
         user_avatarurl: str | None = None,
         async_media_delay: int | None = None,
         image_size: int | None = None,
         image_category: str | None = None,
+        image_url: str | None = None,
         reply_to_event_id: str | None = None,
         bridge_name: str = "dummybridge",
-    ) -> None:
+    ) -> tuple[str, list[str], list[str]]:
         # TODO: this function is a total mess now, probably be good to separate it into a few
         # sub-commands like?:
         # generate room
@@ -178,9 +186,12 @@ class ContentGenerator:
             if not message_text:
                 raise ValueError("Must specify `message_text` when `message_type` is reaction!")
 
-        if users:
-            userids = [self.generate_userid() for user in range(users)]
-            for userid in userids:
+        if user_ids:
+            if users:
+                raise ValueError("Must not specify `users` when `user_ids` set")
+        elif users:
+            user_ids = [self.generate_userid() for user in range(users)]
+            for userid in user_ids:
                 avatar_mxc, _ = await self.download_and_upload_image(
                     appservice=appservice,
                     image_url=user_avatarurl,
@@ -191,10 +202,10 @@ class ContentGenerator:
                 )
                 await appservice.intent.user(userid).set_avatar_url(avatar_mxc)
         else:
-            existing_userids = await appservice.intent.get_joined_members(room_id)
-            userids = [
+            existing_user_ids = await appservice.intent.get_joined_members(room_id)
+            user_ids = [
                 userid
-                for userid in existing_userids
+                for userid in existing_user_ids
                 if userid.startswith(f"@{self.user_prefix}")
                 and not userid.startswith(f"@{self.user_prefix}bot")
             ]
@@ -217,17 +228,17 @@ class ContentGenerator:
             )
             await appservice.intent.invite_user(room_id, owner)
 
-        userids = deque(userids)
+        user_id_deque = deque(user_ids)
 
         if message_type == "reaction":
-            await self.generate_reaction_event(
+            react_event_id = await self.generate_reaction_event(
                 appservice=appservice,
-                user_id=userids[0],
+                user_id=user_id_deque[0],
                 room_id=room_id,
                 message_text=message_text,
                 reply_to_event_id=reply_to_event_id,
             )
-            return
+            return room_id, [user_id_deque[0]], [react_event_id]
 
         if message_type == "text":
 
@@ -253,11 +264,16 @@ class ContentGenerator:
             raise ValueError(f"Invalid `message_type`: {message_type}")
 
         messages = [await generator() for user in range(messages)]
+        event_ids = []
 
         for message in messages:
-            await appservice.intent.user(userids[0]).send_message_event(
-                room_id,
-                EventType.ROOM_MESSAGE,
-                message,
+            event_ids.append(
+                await appservice.intent.user(user_id_deque[0]).send_message_event(
+                    room_id,
+                    EventType.ROOM_MESSAGE,
+                    message,
+                ),
             )
-            userids.rotate()
+            user_id_deque.rotate()
+
+        return room_id, user_ids, event_ids
