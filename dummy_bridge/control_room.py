@@ -274,7 +274,6 @@ class ControlRoom:
                 user_displayname=message["contact"],
                 user_avatarurl=message["avatar-url"],
             )
-            print("USERS", user_ids)
             contact_to_user_id[contact] = user_ids[0]
 
         await self.send_message(f"🧑 Created {len(contact_to_user_id)} users...")
