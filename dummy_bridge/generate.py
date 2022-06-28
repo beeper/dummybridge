@@ -158,6 +158,7 @@ class ContentGenerator:
         image_url: str | None = None,
         reply_to_event_id: str | None = None,
         bridge_name: str = "dummybridge",
+        delay: int | None = None,
     ) -> tuple[str, list[str], list[str]]:
         # TODO: this function is a total mess now, probably be good to separate it into a few
         # sub-commands like?:
@@ -231,6 +232,8 @@ class ContentGenerator:
         user_id_deque = deque(user_ids)
 
         if message_type == "reaction":
+            if delay:
+                asyncio.sleep(delay)
             react_event_id = await self.generate_reaction_event(
                 appservice=appservice,
                 user_id=user_id_deque[0],
@@ -267,6 +270,8 @@ class ContentGenerator:
         event_ids = []
 
         for message in messages:
+            if delay:
+                asyncio.sleep(delay)
             event_ids.append(
                 await appservice.intent.user(user_id_deque[0]).send_message_event(
                     room_id,
