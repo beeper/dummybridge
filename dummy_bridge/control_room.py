@@ -240,6 +240,17 @@ class ControlRoom:
             await self.send_message("✅ Generation complete, enjoy!")
 
     async def generate_from_file(self, mxc: str):
+        try:
+            await self._generate_from_file(mxc=mxc)
+        except Exception as e:
+            await self.send_message(f"💀 Error generating from file: {e}")
+            raise
+        else:
+            await self.send_message("✅ File generation complete, enjoy!")
+
+    async def _generate_from_file(self, mxc: str):
+        await self.send_message("File received, starting work...")
+
         contents = await self.intent.download_media(mxc)
         contents = contents.decode()
 
