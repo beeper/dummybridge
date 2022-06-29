@@ -265,6 +265,7 @@ class ControlRoom:
             messages=0,
             bridge_name=messages[0]["chat-app"],
             room_name=messages[0]["room-name"],
+            room_avatarurl=messages[0].get("room-avatar-url"),
         )
 
         await self.send_message("🗂️ Created room...")
@@ -323,8 +324,13 @@ class ControlRoom:
                 "room_id": room_id,
                 "user_ids": [contact_to_user_id[message["contact"]]],
                 "messages": 1,
-                "delay": message.get("delay"),
+                "delay": int(message.get("delay", 0)),
             }
+
+            delay = int(message.get("delay", 0))
+            if delay:
+                await self.send_message(f"Waiting for {delay}s...")
+                await asyncio.sleep(delay)
 
             message_type = message.get("message-type", "text")
             reply_to_message_id = message.get("reply-to-message-id")
