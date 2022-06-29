@@ -291,11 +291,12 @@ class ControlRoom:
         await self.send_message(f"🧑 Created {len(contact_to_user_id)} users...")
 
         message_event_ids = {}
+        used_event_ids = set()
 
         for i, message in enumerate(messages):
             if message["contact"] == "sender":
                 await self.send_message(
-                    "First message is from sender, that's you!\n"
+                    "Next message is from sender, that's you!\n"
                     "I'll wait here until you send a message in the new room",
                 )
                 while True:
@@ -304,20 +305,31 @@ class ControlRoom:
                             room_id=room_id,
                             direction=PaginationDirection.BACKWARD,
                             from_token="",
-                            filter_json={"types": [str(EventType.ROOM_MESSAGE)]},
+                            filter_json={"types": [str(EventType.ROOM_MESSAGE), str(EventType.REACTION)]},
                         )
                     except Exception as e:
                         if "not in response" not in f"{e}":
                             raise
+                        await asyncio.sleep(1)
                         continue
 
-                    events = room_messages.events
-                    assert len(events) == 1, "You sent too many messages!"
-                    message_event_ids[message["message-id"]] = events[0].event_id
-                    if room_messages:
-                        break
+                    user_events = [
+                        event for event in room_messages.events
+                        if event.sender == self.owner
+                        and event.event_id not in used_event_ids
+                    ]
 
-                    await asyncio.sleep(10)
+                    if len(user_events) == 1:
+                        message_event_ids[message["message-id"]] = user_events[0].event_id
+                        used_event_ids.add(user_events[0].event_id)
+                        if room_messages:
+                            break
+
+                    if len(user_events) > 1:
+                        await self.send_message("You send too many messages!")
+                        return
+
+                    await asyncio.sleep(1)
                 continue
 
             generator_kwargs = {
@@ -361,4 +373,3 @@ class ControlRoom:
             message_event_ids[message["message-id"]] = event_ids[0]
 
         await self.send_message(f"📩 Sent {len(message_event_ids)} messages...")
-        await self.send_message("✅ File generation complete, enjoy!")
