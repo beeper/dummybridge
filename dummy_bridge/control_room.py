@@ -336,7 +336,6 @@ class ControlRoom:
                 "room_id": room_id,
                 "user_ids": [contact_to_user_id[message["contact"]]],
                 "messages": 1,
-                "delay": int(message.get("delay", 0)),
             }
 
             delay = int(message.get("delay", 0))
