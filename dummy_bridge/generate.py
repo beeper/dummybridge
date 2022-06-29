@@ -145,6 +145,7 @@ class ContentGenerator:
         owner: str,
         room_id: str = None,
         room_name: str | None = None,
+        room_avatarurl: str | None = None,
         messages: int = 1,
         message_type: str = "text",
         message_text: str | None = None,
@@ -193,7 +194,7 @@ class ContentGenerator:
         elif users:
             user_ids = [self.generate_userid() for user in range(users)]
             for userid in user_ids:
-                avatar_mxc, _ = await self.download_and_upload_image(
+                user_avatar_mxc, _ = await self.download_and_upload_image(
                     appservice=appservice,
                     image_url=user_avatarurl,
                 )
@@ -201,7 +202,7 @@ class ContentGenerator:
                 await appservice.intent.user(userid).set_displayname(
                     user_displayname or self.faker.name(),
                 )
-                await appservice.intent.user(userid).set_avatar_url(avatar_mxc)
+                await appservice.intent.user(userid).set_avatar_url(user_avatar_mxc)
         else:
             existing_user_ids = await appservice.intent.get_joined_members(room_id)
             user_ids = [
@@ -227,6 +228,12 @@ class ContentGenerator:
                     "m.federate": False,
                 },
             )
+            if room_avatarurl:
+                room_avatar_mxc, _ = await self.download_and_upload_image(
+                    appservice=appservice,
+                    image_url=room_avatarurl,
+                )
+                await appservice.intent.set_room_avatar(room_id, room_avatar_mxc)
             await appservice.intent.invite_user(room_id, owner)
 
         user_id_deque = deque(user_ids)
