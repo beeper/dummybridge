@@ -4,7 +4,7 @@ import logging
 from inspect import signature
 
 from mautrix.appservice import AppService, IntentAPI
-from mautrix.errors import MNotFound
+from mautrix.errors import IntentError, MNotFound
 from mautrix.types import (
     EventType,
     MessageType,
@@ -85,8 +85,14 @@ class ControlRoom:
 
         if room_id:
             logger.debug(f"Using existing control room {room_id}")
-            joined_members = await self.intent.get_joined_members(room_id)
-        else:
+            try:
+                joined_members = await self.intent.get_joined_members(room_id)
+            except IntentError:
+                logger.exception("Failed to get joined members")
+                room_id = None
+                pass
+
+        if not room_id:
             logger.debug("Creating new control room")
             room_id = await self.intent.create_room(
                 name=f"{self.name} Control",
