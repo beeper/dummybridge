@@ -170,7 +170,7 @@ class ContentGenerator:
         if room_id is None:
             if users is None:
                 users = 1
-            else:
+            elif users == 0:
                 raise ValueError("Must provide `room_id` when users is set to 0!")
 
         if reply_to_event_id is not None:
