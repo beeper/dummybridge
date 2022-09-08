@@ -59,6 +59,7 @@ class DummyBridge:
             id=registration["id"],
             domain=domain or homeserver,
             server=homeserver,
+            ephemeral_events=True,
             as_token=registration["as_token"],
             hs_token=registration["hs_token"],
             bot_localpart=registration["sender_localpart"],
@@ -107,6 +108,10 @@ class DummyBridge:
             asyncio.create_task(self.websocket_handler.start_websocket_loop())
 
     async def on_event(self, event):
+        if event.type.is_ephemeral:
+            logger.info(f"Received EDU: {event}")
+            return
+
         if event.room_id == self.control_room_id:
             await self.control_room.on_event(event)
         else:
