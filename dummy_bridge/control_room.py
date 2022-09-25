@@ -34,7 +34,7 @@ Create a room with 10 messages from 5 users (2 messages/user):
     generate messages=10 users=5
 
 Create 10 messages in an existing room (sent from all current users at random)
-    generate roomID=!ABC:beeper.com messages=10
+    generate room_id=!ABC:beeper.com messages=10
 """.strip()
 
 
