@@ -193,15 +193,16 @@ class ContentGenerator:
         elif users:
             user_ids = [self.generate_userid() for user in range(users)]
             for userid in user_ids:
-                user_avatar_mxc, _ = await self.download_and_upload_image(
-                    appservice=appservice,
-                    image_url=user_avatarurl,
-                )
                 await appservice.intent.user(userid).ensure_registered()
                 await appservice.intent.user(userid).set_displayname(
                     user_displayname or self.faker.name(),
                 )
-                await appservice.intent.user(userid).set_avatar_url(user_avatar_mxc)
+                if user_avatarurl:
+                    user_avatar_mxc, _ = await self.download_and_upload_image(
+                        appservice=appservice,
+                        image_url=user_avatarurl,
+                    )
+                    await appservice.intent.user(userid).set_avatar_url(user_avatar_mxc)
         else:
             existing_user_ids = await appservice.intent.get_joined_members(room_id)
             user_ids = [
