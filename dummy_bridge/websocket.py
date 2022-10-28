@@ -40,7 +40,10 @@ class WebSocketHandler:
             pong = {
                 "id": data["id"],
                 "command": "response",
-                "data": state_response.serialize(),
+                "data": {
+                    "state": state_response.serialize(),
+                    "echo": data["data"],
+                },
             }
 
             logger.debug(f"Sending ping response: {pong}")
