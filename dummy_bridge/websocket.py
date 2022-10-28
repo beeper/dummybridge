@@ -47,6 +47,16 @@ class WebSocketHandler:
             await ws.send_json(pong)
         else:
             logger.warning(f"Unknown websocket command: {command}")
+            await ws.send_json(
+                {
+                    "id": data["id"],
+                    "command": "error",
+                    "data": {
+                        "code": "UNKNOWN_COMMAND",
+                        "message": f"Unknown command {command}",
+                    },
+                }
+            )
 
     async def read_websocket_messages(self, ws):
         async for message in ws:
