@@ -68,6 +68,7 @@ class WebSocketHandler:
                         headers={
                             "Authorization": f"Bearer {self.registration['as_token']}",
                             "X-Mautrix-Process-ID": "DummyBridge",
+                            "X-Mautrix-Websocket-Version": "3",
                         },
                     ) as ws:
                         delay = 1
