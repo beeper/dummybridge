@@ -1,10 +1,14 @@
 import asyncio
+import logging
+import time
 from collections import deque
+from typing import Generator
 
 import aiohttp
 from faker import Faker
 from mautrix.appservice import AppService
 from mautrix.types import (
+    BatchSendEvent,
     EventType,
     ImageInfo,
     MediaMessageEventContent,
@@ -14,6 +18,8 @@ from mautrix.types import (
 )
 
 StateBridge = EventType.find("m.bridge", EventType.Class.STATE)
+
+logger = logging.getLogger(__name__)
 
 
 async def _download_image(image_url: str) -> bytes:
@@ -159,6 +165,8 @@ class ContentGenerator:
         image_url: str | None = None,
         reply_to_event_id: str | None = None,
         bridge_name: str = "dummybridge",
+        infinite_backfill: bool = False,
+        infinite_backfill_delay: int = 0,
     ) -> tuple[str, list[str], list[str]]:
         # TODO: this function is a total mess now, probably be good to separate it into a few
         # sub-commands like?:
@@ -212,6 +220,13 @@ class ContentGenerator:
                 and not userid.startswith(f"@{self.user_prefix}bot")
             ]
 
+        def _user_id_generator() -> Generator[str, None, None]:
+            while True:
+                for userid in user_ids:
+                    yield userid
+
+        user_id_generator = _user_id_generator()
+
         if not room_id:
             initial_state = [
                 {
@@ -236,17 +251,16 @@ class ContentGenerator:
                 await appservice.intent.set_room_avatar(room_id, room_avatar_mxc)
             await appservice.intent.invite_user(room_id, owner)
 
-        user_id_deque = deque(user_ids)
-
         if message_type == "reaction":
+            user_id = next(user_id_generator)
             react_event_id = await self.generate_reaction_event(
                 appservice=appservice,
-                user_id=user_id_deque[0],
+                user_id=user_id,
                 room_id=room_id,
                 message_text=message_text,
                 reply_to_event_id=reply_to_event_id,
             )
-            return room_id, [user_id_deque[0]], [react_event_id]
+            return room_id, [user_id], [react_event_id]
 
         if message_type == "text":
 
@@ -271,17 +285,40 @@ class ContentGenerator:
         else:
             raise ValueError(f"Invalid `message_type`: {message_type}")
 
-        messages = [await generator() for user in range(messages)]
+        message_events = [await generator() for _ in range(messages)]
         event_ids = []
 
-        for message in messages:
-            event_ids.append(
-                await appservice.intent.user(user_id_deque[0]).send_message_event(
-                    room_id,
-                    EventType.ROOM_MESSAGE,
-                    message,
-                ),
+        if infinite_backfill:
+            event_id = await appservice.intent.send_message_event(
+                room_id, EventType("fi.mau.dummy.pre_backfill", EventType.Class.MESSAGE), {}
             )
-            user_id_deque.rotate()
+            await asyncio.sleep(infinite_backfill_delay)
+            batch_send_events = [
+                BatchSendEvent(
+                    content=content,
+                    type=EventType.ROOM_MESSAGE,
+                    sender=next(user_id_generator),
+                    timestamp=(
+                        int(time.time() * 1000) - (1000 * (len(message_events) + 1)) + (1000 * i)
+                    ),
+                )
+                for i, content in enumerate(message_events)
+            ]
+            logger.debug("Sending %d events %s", len(batch_send_events), str(batch_send_events))
+            await appservice.intent.batch_send(
+                room_id,
+                event_id,
+                events=batch_send_events,
+                beeper_new_messages=True,
+            )
+        else:
+            for content in message_events:
+                event_ids.append(
+                    await appservice.intent.user(next(user_id_generator)).send_message_event(
+                        room_id,
+                        EventType.ROOM_MESSAGE,
+                        content,
+                    ),
+                )
 
         return room_id, user_ids, event_ids
