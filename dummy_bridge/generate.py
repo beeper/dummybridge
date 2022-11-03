@@ -305,12 +305,14 @@ class ContentGenerator:
                 for i, content in enumerate(message_events)
             ]
             logger.debug("Sending %d events %s", len(batch_send_events), str(batch_send_events))
-            await appservice.intent.batch_send(
-                room_id,
-                event_id,
-                events=batch_send_events,
-                beeper_new_messages=True,
-            )
+            event_ids = (
+                await appservice.intent.batch_send(
+                    room_id,
+                    event_id,
+                    events=batch_send_events,
+                    beeper_new_messages=True,
+                )
+            ).event_ids
         else:
             for content in message_events:
                 event_ids.append(
