@@ -344,7 +344,7 @@ class ControlRoom:
                 "messages": 1,
             }
 
-            delay = int(message.get("delay", 0))
+            delay = int(message.get("delay") or 0)
             if delay:
                 await self.send_message(f"Waiting for {delay}s...")
                 await asyncio.sleep(delay)
