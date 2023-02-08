@@ -145,20 +145,18 @@ class MessageSendStatusHandler:
         message_send_status_content = {
             "network": "dummybridge",
             "m.relates_to": RelatesTo(RelationType.REFERENCE, event.event_id).serialize(),
-            "success": True,
+            "status": "SUCCESS",
         }
 
         if action == Action.FAIL:
             no_retry = "noretry" in check_text
-            not_certain = "notcertain" in check_text
+
             message_send_status_content.update(
                 {
-                    "success": False,
+                    "status": "FAIL_PERMANENT" if no_retry else "FAIL_RETRIABLE",
                     "reason": "m.foreign_network_error",
                     "error": "COM.BEEPER.DUMMY_FAIL" if not action_overridden else "COM.BEEPER.DUMMY_NEXT_FAIL",
                     "message": "'fail' was in the content body" if not action_overridden else "last message contained 'next fail'",
-                    "can_retry": not no_retry,
-                    "is_certain": not not_certain,
                 }
             )
 
