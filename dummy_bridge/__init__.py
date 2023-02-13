@@ -101,6 +101,10 @@ class DummyBridge:
             owner=self.owner,
             generator=self.generator,
             client_api=self.client_api,
+            checkpoint_endpoint=(
+                f"{self.homeserver}/_matrix/client/unstable/"
+                "com.beeper.message_send_checkpoint/dummybridge"
+            ),
         )
 
         if self.use_websocket:

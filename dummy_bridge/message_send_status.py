@@ -1,14 +1,21 @@
 import asyncio
 import logging
+import time
 
 from mautrix.appservice.appservice import AppService
 from mautrix.client.api.client import ClientAPI
 from mautrix.types import EventType, RelatesTo, RelationType, UserID
+from mautrix.util import background_task
+from mautrix.util.message_send_checkpoint import (
+    MessageSendCheckpoint,
+    MessageSendCheckpointReportedBy,
+    MessageSendCheckpointStatus,
+    MessageSendCheckpointStep,
+)
 
 from .generate import ContentGenerator
 from .util import parse_args
 from enum import Enum, auto
-from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +52,19 @@ If "next" is included in the message, than whatever would have been applied to t
 will instead be deferred and apply to the next message. For example, sending "next nostatus" will
 get a successful status, but the next message sent will not receive a status, no matter what the
 message is. This can be useful for testing redactions and retries.
+
+<hr>
+
+The bridge will also send message send checkpoints for all messages, redactions, and
+reactions.<br><br>
+By default, it will send successful <code>BRIDGE</code>, <code>DECRYPTED</code>, and
+<code>REMOTE</code> checkpoints, however you can stop it from sending these by including the text
+"nobridge" (or "🌉"), "nodecrypted" (or "🔐"), or "noremote" ("🤷") in the message. Note that
+"nobridge" implies "nodecrypted" and "noremote", and "nodecrypted" implies "noremote".<br><br>
 """.strip()
 
-class Action(Enum):
+
+class MSSAction(Enum):
     SUCCESS = auto()
     FAIL = auto()
     NO_STATUS = auto()
@@ -55,28 +72,49 @@ class Action(Enum):
     GENERATE = auto()
     HELP = auto()
 
-def action_from_checktext(check_text: str) -> Tuple[Action, bool, bool]:
-    action = Action.SUCCESS
+
+class CheckpointAction(Enum):
+    SUCCESS = auto()
+    NO_BRIDGE = auto()
+    NO_DECRYPTED = auto()
+    NO_REMOTE = auto()
+
+
+def action_from_checktext(check_text: str) -> tuple[MSSAction, CheckpointAction, bool, bool]:
+    mss_action = MSSAction.SUCCESS
+    checkpoint_action = CheckpointAction.SUCCESS
     no_retry = "noretry" in check_text
     not_certain = "notcertain" in check_text
     if "nostatus" in check_text or "❌" in check_text:
-        action = Action.NO_STATUS
+        mss_action = MSSAction.NO_STATUS
     if "latestatus" in check_text or "⏲️" in check_text:
-        action = Action.LATE
+        mss_action = MSSAction.LATE
     if "fail" in check_text or "🔥" in check_text:
-        action = Action.FAIL
+        mss_action = MSSAction.FAIL
     if check_text.startswith("!generate"):
-        action = Action.GENERATE
+        mss_action = MSSAction.GENERATE
     if check_text.startswith("!help"):
-        action = Action.HELP
-    return action, no_retry, not_certain
+        mss_action = MSSAction.HELP
+    if "nobridge" in check_text or "🌉" in check_text:
+        checkpoint_action = CheckpointAction.NO_BRIDGE
+    if "nodecrypted" in check_text or "🔐" in check_text:
+        checkpoint_action = CheckpointAction.NO_DECRYPTED
+    if "noremote" in check_text or "🤷" in check_text:
+        checkpoint_action = CheckpointAction.NO_REMOTE
+    return mss_action, checkpoint_action, no_retry, not_certain
 
-def next_action_from_checktext(check_text: str) -> Optional[Action]:
+
+def next_action_from_checktext(check_text: str) -> tuple[MSSAction | None, CheckpointAction | None]:
     if "next" in check_text:
-        action, _, _ = action_from_checktext(check_text)
-        if action != Action.SUCCESS or "success" in check_text:
-            return action
-    return None
+        mss_action, checkpoint_action, _, _ = action_from_checktext(check_text)
+        if (
+            mss_action != MSSAction.SUCCESS
+            or checkpoint_action != CheckpointAction.SUCCESS
+            or "success" in check_text
+        ):
+            return mss_action, checkpoint_action
+    return None, None
+
 
 def check_text_from_event(event) -> str:
     check_text = ""
@@ -96,12 +134,39 @@ class MessageSendStatusHandler:
         owner: UserID,
         generator: ContentGenerator,
         client_api: ClientAPI,
+        checkpoint_endpoint: str,
     ):
         self.appservice = appservice
         self.owner = owner
         self.generator = generator
         self.client_api = client_api
-        self.next_action: Optional[Action] = None
+        self.next_mss_action: MSSAction | None = None
+        self.next_checkpoint_action: CheckpointAction | None = None
+        self.checkpoint_endpoint: str = checkpoint_endpoint
+
+    async def _send_checkpoint(
+        self,
+        evt,
+        step: MessageSendCheckpointStep,
+        status: MessageSendCheckpointStatus,
+        err=None,
+        retry_num: int | None = None,
+    ):
+        checkpoint = MessageSendCheckpoint(
+            event_id=evt.event_id,
+            room_id=evt.room_id,
+            step=step,
+            timestamp=int(time.time() * 1000),
+            status=status,
+            reported_by=MessageSendCheckpointReportedBy.BRIDGE,
+            event_type=evt.type,
+            message_type=evt.content.msgtype if evt.type == EventType.ROOM_MESSAGE else None,
+            info=str(err) if err else None,
+            retry_num=retry_num,
+        )
+        background_task.create(
+            checkpoint.send(self.checkpoint_endpoint, self.appservice.as_token, logger)
+        )
 
     async def handle_event(self, event):
         if event.sender != self.owner:
@@ -110,21 +175,34 @@ class MessageSendStatusHandler:
             return
 
         check_text = check_text_from_event(event)
-        action, no_retry, not_certain = action_from_checktext(check_text)
+        mss_action, checkpoint_action, no_retry, not_certain = action_from_checktext(check_text)
+
+        if checkpoint_action != CheckpointAction.NO_BRIDGE:
+            await self._send_checkpoint(
+                event, MessageSendCheckpointStep.BRIDGE, MessageSendCheckpointStatus.SUCCESS
+            )
+
+        # We don't actually have encryption on the bridge, so this is just a mock.
+        if checkpoint_action not in (CheckpointAction.NO_BRIDGE, CheckpointAction.NO_DECRYPTED):
+            await self._send_checkpoint(
+                event, MessageSendCheckpointStep.DECRYPTED, MessageSendCheckpointStatus.SUCCESS
+            )
 
         # Override next action if last action was a "next" action
         action_overridden = False
-        if self.next_action:
-            logger.debug(f"Performing action from override {self.next_action.name}")
+        if self.next_mss_action:
+            logger.debug(f"Performing action from override {self.next_mss_action.name}")
             action_overridden = True
-            action = self.next_action
-        self.next_action = next_action_from_checktext(check_text)
-        if self.next_action:
-            logger.debug(f"Will override next action with {self.next_action.name}")
-            await self.client_api.send_notice(event.room_id, text=f"Next message will have action {self.next_action.name}")
-            action = Action.SUCCESS
+            mss_action = self.next_mss_action
+        self.next_mss_action, self.next_checkpoint_action = next_action_from_checktext(check_text)
+        if self.next_mss_action:
+            logger.debug(f"Will override next action with {self.next_mss_action.name}")
+            await self.client_api.send_notice(
+                event.room_id, text=f"Next message will have action {self.next_mss_action.name}"
+            )
+            mss_action = MSSAction.SUCCESS
 
-        if action == Action.GENERATE:
+        if mss_action == MSSAction.GENERATE:
             try:
                 kwargs = parse_args(check_text.removeprefix("!generate"))
             except Exception as e:
@@ -135,12 +213,21 @@ class MessageSendStatusHandler:
             await self.generator.generate_content(
                 self.appservice, self.owner, room_id=event.room_id, **kwargs
             )
-        elif action == Action.HELP:
+        elif mss_action == MSSAction.HELP:
             await self.client_api.send_notice(event.room_id, html=HELP_TEXT)
-        elif action == Action.NO_STATUS:
+        elif mss_action == MSSAction.NO_STATUS:
             return
-        elif action == Action.LATE:
+        elif mss_action == MSSAction.LATE:
             await asyncio.sleep(15)
+
+        if checkpoint_action not in (
+            CheckpointAction.NO_BRIDGE,
+            CheckpointAction.NO_DECRYPTED,
+            CheckpointAction.NO_REMOTE,
+        ):
+            await self._send_checkpoint(
+                event, MessageSendCheckpointStep.REMOTE, MessageSendCheckpointStatus.SUCCESS
+            )
 
         message_send_status_content = {
             "network": "dummybridge",
@@ -148,15 +235,23 @@ class MessageSendStatusHandler:
             "status": "SUCCESS",
         }
 
-        if action == Action.FAIL:
+        if mss_action == MSSAction.FAIL:
             no_retry = "noretry" in check_text
 
             message_send_status_content.update(
                 {
                     "status": "FAIL_PERMANENT" if no_retry else "FAIL_RETRIABLE",
                     "reason": "m.foreign_network_error",
-                    "error": "COM.BEEPER.DUMMY_FAIL" if not action_overridden else "COM.BEEPER.DUMMY_NEXT_FAIL",
-                    "message": "'fail' was in the content body" if not action_overridden else "last message contained 'next fail'",
+                    "error": (
+                        "COM.BEEPER.DUMMY_FAIL"
+                        if not action_overridden
+                        else "COM.BEEPER.DUMMY_NEXT_FAIL"
+                    ),
+                    "message": (
+                        "'fail' was in the content body"
+                        if not action_overridden
+                        else "last message contained 'next fail'"
+                    ),
                 }
             )
 
