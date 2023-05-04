@@ -165,7 +165,7 @@ class ContentGenerator:
         image_url: str | None = None,
         reply_to_event_id: str | None = None,
         bridge_name: str = "dummybridge",
-        infinite_backfill: bool = False,
+        infinite_backfill: int = 0,
         infinite_backfill_delay: int = 0,
     ) -> tuple[str, list[str], list[str]]:
         # TODO: this function is a total mess now, probably be good to separate it into a few
@@ -200,7 +200,8 @@ class ContentGenerator:
                 raise ValueError("Must not specify `users` when `user_ids` set")
         elif users:
             user_ids = [self.generate_userid() for user in range(users)]
-            for userid in user_ids:
+
+            async def _create_user(userid, user_avatarurl):
                 await appservice.intent.user(userid).ensure_registered()
                 await appservice.intent.user(userid).set_displayname(
                     user_displayname or self.faker.name(),
@@ -211,6 +212,12 @@ class ContentGenerator:
                         image_url=user_avatarurl,
                     )
                     await appservice.intent.user(userid).set_avatar_url(user_avatar_mxc)
+
+            calls = []
+            for userid in user_ids:
+                calls.append(_create_user(userid, user_avatarurl))
+
+            await asyncio.gather(*calls)
         else:
             existing_user_ids = await appservice.intent.get_joined_members(room_id)
             user_ids = [
@@ -289,30 +296,31 @@ class ContentGenerator:
         event_ids = []
 
         if infinite_backfill:
-            event_id = await appservice.intent.send_message_event(
-                room_id, EventType("fi.mau.dummy.pre_backfill", EventType.Class.MESSAGE), {}
-            )
-            await asyncio.sleep(infinite_backfill_delay)
-            batch_send_events = [
-                BatchSendEvent(
-                    content=content,
-                    type=EventType.ROOM_MESSAGE,
-                    sender=next(user_id_generator),
-                    timestamp=(
-                        int(time.time() * 1000) - (1000 * (len(message_events) + 1)) + (1000 * i)
-                    ),
+            for i in range(infinite_backfill):
+                event_id = await appservice.intent.send_message_event(
+                    room_id, EventType("fi.mau.dummy.pre_backfill", EventType.Class.MESSAGE), {}
                 )
-                for i, content in enumerate(message_events)
-            ]
-            logger.debug("Sending %d events %s", len(batch_send_events), str(batch_send_events))
-            event_ids = (
-                await appservice.intent.batch_send(
-                    room_id,
-                    event_id,
-                    events=batch_send_events,
-                    beeper_new_messages=True,
-                )
-            ).event_ids
+                await asyncio.sleep(infinite_backfill_delay)
+                batch_send_events = [
+                    BatchSendEvent(
+                        content=content,
+                        type=EventType.ROOM_MESSAGE,
+                        sender=next(user_id_generator),
+                        timestamp=(
+                            int(time.time() * 1000) - (1000 * (len(message_events) + 1)) + (1000 * i)
+                        ),
+                    )
+                    for i, content in enumerate(message_events)
+                ]
+                logger.debug("Sending %d events %s", len(batch_send_events), str(batch_send_events))
+                event_ids += (
+                    await appservice.intent.batch_send(
+                        room_id,
+                        event_id,
+                        events=batch_send_events,
+                        beeper_new_messages=True,
+                    )
+                ).event_ids
         else:
             for content in message_events:
                 event_ids.append(
