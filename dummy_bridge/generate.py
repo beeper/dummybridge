@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
-from collections import deque
 from typing import Generator
 
 import aiohttp
@@ -41,13 +42,13 @@ async def _generate_random_image(size: int, category: str) -> bytes:
 
 class ContentGenerator:
     def __init__(self, user_prefix, user_domain):
-        self.faker = Faker()
+        self.faker = Faker(locale=["en_US", "es_CO"])
         self.user_prefix = user_prefix
         self.user_domain = user_domain
 
     def generate_userid(self):
-        user_name = self.faker.user_name()
-        return UserID(f"@{self.user_prefix}{user_name}:{self.user_domain}")
+        id = self.faker.msisdn()
+        return UserID(f"@{self.user_prefix}{id}:{self.user_domain}")
 
     async def download_and_upload_image(
         self,

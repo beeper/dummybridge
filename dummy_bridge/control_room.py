@@ -11,6 +11,7 @@ from mautrix.types import (
     PaginationDirection,
     TextMessageEventContent,
     UserID,
+    StrippedStateEvent,
 )
 
 from .generate import ContentGenerator
@@ -111,8 +112,12 @@ class ControlRoom:
         self.room_id = room_id
         return room_id
 
-    async def on_event(self, event):
+    async def on_event(self, event: StrippedStateEvent):
         if event.type is EventType.ROOM_MESSAGE:
+
+            if event.sender == self.intent.mxid:
+                return
+
             if event.content.msgtype == MessageType.FILE:
                 if event.content.info.mimetype != "text/tab-separated-values":
                     await self.send_message(
