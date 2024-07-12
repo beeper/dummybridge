@@ -1,6 +1,6 @@
 module github.com/beeper/dummybridge
 
-go 1.22.1
+go 1.21
 
 require (
 	go.mau.fi/util v0.5.1-0.20240702075351-577617730cb7
