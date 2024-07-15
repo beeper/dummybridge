@@ -81,7 +81,7 @@ func (dc *DummyClient) ResolveIdentifier(ctx context.Context, identifier string,
 	if err != nil {
 		return nil, fmt.Errorf("failed to get ghost: %w", err)
 	}
-	portal, err := dc.UserLogin.Bridge.GetPortalByID(ctx, portalKey)
+	portal, err := dc.UserLogin.Bridge.GetPortalByKey(ctx, portalKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get portal: %w", err)
 	}
@@ -112,7 +112,7 @@ func (dc *DummyClient) ResolveIdentifier(ctx context.Context, identifier string,
 		UserInfo: ghostInfo,
 		Chat: &bridgev2.CreateChatResponse{
 			Portal:     portal,
-			PortalID:   portalKey,
+			PortalKey:  portalKey,
 			PortalInfo: portalInfo,
 		},
 	}, nil

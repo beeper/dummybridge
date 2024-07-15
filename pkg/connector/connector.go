@@ -6,6 +6,7 @@ import (
 	"go.mau.fi/util/configupgrade"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/commands"
+	"maunium.net/go/mautrix/bridgev2/database"
 )
 
 type DummyConnector struct {
@@ -35,6 +36,10 @@ func (dc *DummyConnector) GetName() bridgev2.BridgeName {
 		NetworkID:        "dummy",
 		BeeperBridgeType: "beeper.com/dummy",
 	}
+}
+
+func (dc *DummyConnector) GetDBMetaTypes() database.MetaTypes {
+	return database.MetaTypes{}
 }
 
 func (dc *DummyConnector) GetConfig() (example string, data any, upgrader configupgrade.Upgrader) {

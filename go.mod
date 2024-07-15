@@ -3,8 +3,8 @@ module github.com/beeper/dummybridge
 go 1.21
 
 require (
-	go.mau.fi/util v0.5.1-0.20240702075351-577617730cb7
-	maunium.net/go/mautrix v0.19.0-beta.1.0.20240710204602-dd16a8d1d90b
+	go.mau.fi/util v0.5.1-0.20240713134429-03648b3ede41
+	maunium.net/go/mautrix v0.19.0-beta.1.0.20240714080619-d1905f623215
 )
 
 require (

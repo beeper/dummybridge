@@ -29,7 +29,7 @@ var NewRoomCommand = &commands.FullHandler{
 			Receiver: login.ID,
 		}
 
-		portal, err := e.Bridge.GetPortalByID(e.Ctx, portalKey)
+		portal, err := e.Bridge.GetPortalByKey(e.Ctx, portalKey)
 		if err != nil {
 			e.Reply(err.Error())
 			return
