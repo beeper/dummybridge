@@ -14,25 +14,29 @@
         div {
             margin-bottom: 10px;
         }
+
         input {
             padding: 8px;
         }
+
         button {
             padding: 8px;
         }
     </style>
 </head>
 <body>
-    <div>
-        <label for="username">Username:</label>
-        <input type="text" id="username" placeholder="Username"/>
-    </div>
+    <form onsubmit="saveToLocalstorage()">
+        <div>
+            <label for="username">Username:</label>
+            <input type="text" id="username" placeholder="Username"/>
+        </div>
 
-    <div>
-        <label for="password">Password:</label>
-        <input type="password" id="password" placeholder="Password"/>
-    </div>
+        <div>
+            <label for="password">Password:</label>
+            <input type="password" id="password" placeholder="Password"/>
+        </div>
 
-    <button id="login" onClick="saveToLocalstorage()">Save to cookies</button>
+        <button id="login">Save to localStorage</button>
+    </form>
 </body>
 </html>

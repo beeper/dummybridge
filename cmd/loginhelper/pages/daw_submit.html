@@ -13,6 +13,7 @@
                 .replace("_", "-")
                 .replace(/[^0123456789ABCDEFGHJKMNPQRSTVWXYZ-]/, "")
         }
+
         function submitToWaiter() {
             const reqID = document.getElementById("reqid").value
             fetch(`../api/daw_submit/${reqID}`, {
@@ -31,30 +32,35 @@
         div {
             margin-bottom: 10px;
         }
+
         input {
             padding: 8px;
         }
+
         button {
             padding: 8px;
         }
     </style>
 </head>
 <body>
-    <div>
-        <label for="reqid">Request ID:</label>
-        <input type="text" id="reqid" oninput="this.value = normalizeCrockfordBase32(this.value)" placeholder="ABC-123-DEF"/>
-    </div>
+    <form onsubmit="submitToWaiter()">
+        <div>
+            <label for="reqid">Request ID:</label>
+            <input type="text" id="reqid" oninput="this.value = normalizeCrockfordBase32(this.value)"
+                   placeholder="ABC-123-DEF"/>
+        </div>
 
-    <div>
-        <label for="username">Username:</label>
-        <input type="text" id="username" placeholder="Username"/>
-    </div>
+        <div>
+            <label for="username">Username:</label>
+            <input type="text" id="username" placeholder="Username"/>
+        </div>
 
-    <div>
-        <label for="password">Password:</label>
-        <input type="password" id="password" placeholder="Password"/>
-    </div>
+        <div>
+            <label for="password">Password:</label>
+            <input type="password" id="password" placeholder="Password"/>
+        </div>
 
-    <button id="login" onClick="submitToWaiter()">Submit to waiter</button>
+        <button type="submit" id="login">Submit to waiter</button>
+    </form>
 </body>
 </html>
