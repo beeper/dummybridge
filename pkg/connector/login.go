@@ -141,7 +141,8 @@ func (dl *DummyLogin) Wait(ctx context.Context) (*bridgev2.LoginStep, error) {
 
 func (dl *DummyLogin) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
 	ul, err := dl.User.NewLogin(ctx, &database.UserLogin{
-		ID: networkid.UserLoginID(input["username"]),
+		ID:         networkid.UserLoginID(input["username"]),
+		RemoteName: input["username"],
 	}, &bridgev2.NewLoginParams{})
 	if err != nil {
 		return nil, err
