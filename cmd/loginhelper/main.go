@@ -21,8 +21,12 @@ var lock sync.RWMutex
 func addWaiter(ip, id string, waiter chan map[string]string) bool {
 	lock.Lock()
 	defer lock.Unlock()
-	if inFlightRequests[ip] > 5 {
+	if inFlightRequests[ip] >= 3 {
 		return false
+	}
+	prevWaiter, ok := waiters[id]
+	if ok {
+		close(prevWaiter)
 	}
 	inFlightRequests[ip]++
 	waiters[id] = waiter
@@ -64,13 +68,19 @@ func postWait(w http.ResponseWriter, r *http.Request) {
 		lock.Lock()
 		defer lock.Unlock()
 		inFlightRequests[ip]--
-		delete(waiters, reqID)
+		if waiters[reqID] == waiter {
+			delete(waiters, reqID)
+		}
 	}()
 	select {
 	case <-ctx.Done():
 		response(w, http.StatusTooManyRequests, errorResp{"Wait timeout"})
 	case resp := <-waiter:
-		response(w, http.StatusOK, resp)
+		if resp == nil {
+			response(w, http.StatusNotFound, errorResp{"Waiter overridden"})
+		} else {
+			response(w, http.StatusOK, resp)
+		}
 	}
 }
 
