@@ -24,25 +24,29 @@
         div {
             margin-bottom: 8px;
         }
+
         input {
             padding: 8px;
         }
+
         button {
             padding: 8px;
         }
     </style>
 </head>
 <body>
-    <div>
-        <label for="username">Username:</label>
-        <input type="text" id="username" placeholder="Username"/>
-    </div>
+    <form onsubmit="saveToCookies()">
+        <div>
+            <label for="username">Username:</label>
+            <input type="text" id="username" placeholder="Username"/>
+        </div>
 
-    <div>
-        <label for="password">Password:</label>
-        <input type="password" id="password" placeholder="Password"/>
-    </div>
+        <div>
+            <label for="password">Password:</label>
+            <input type="password" id="password" placeholder="Password"/>
+        </div>
 
-    <button id="login" onClick="saveToCookies()">Save to cookies</button>
+        <button type="submit" id="login">Save to cookies</button>
+    </form>
 </body>
 </html>
