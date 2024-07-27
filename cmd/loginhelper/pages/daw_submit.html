@@ -43,7 +43,7 @@
     </style>
 </head>
 <body>
-    <form onsubmit="submitToWaiter()">
+    <form onsubmit="event.preventDefault();submitToWaiter()">
         <div>
             <label for="reqid">Request ID:</label>
             <input type="text" id="reqid" oninput="this.value = normalizeCrockfordBase32(this.value)"
