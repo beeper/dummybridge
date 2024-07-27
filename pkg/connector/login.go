@@ -119,7 +119,7 @@ func (dl *DummyLogin) SubmitCookies(ctx context.Context, input map[string]string
 }
 
 func (dl *DummyLogin) Wait(ctx context.Context) (*bridgev2.LoginStep, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://random.mau.fi/dummy/api/daw_wait/"+dl.DAWID, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://random.mau.fi/dummy/api/daw_wait/"+dl.DAWID, nil)
 	if err != nil {
 		return nil, err
 	}
