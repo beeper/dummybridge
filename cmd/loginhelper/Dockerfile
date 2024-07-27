@@ -1,6 +1,6 @@
 FROM golang:1-alpine3.20 AS builder
 
-RUN apk add --no-cache build-base olm-dev
+RUN apk add --no-cache build-base
 
 COPY . /build
 WORKDIR /build
@@ -9,6 +9,6 @@ RUN go build -o /usr/bin/loginhelper ./cmd/loginhelper
 
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates olm
+RUN apk add --no-cache ca-certificates
 COPY --from=builder /usr/bin/loginhelper /usr/bin/loginhelper
 CMD ["/usr/bin/loginhelper"]
