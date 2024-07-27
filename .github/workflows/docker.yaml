@@ -62,7 +62,7 @@ jobs:
       with:
         cache-from: ${{ env.GHCR_REGISTRY_LOGINHELPER_IMAGE }}/loginhelper:latest
         pull: true
-        file: ./cmd/dummybridge/Dockerfile
+        file: ./cmd/loginhelper/Dockerfile
         tags: |
           ${{ env.GHCR_REGISTRY_LOGINHELPER_IMAGE }}:${{ github.sha }}
           ${{ env.GHCR_REGISTRY_LOGINHELPER_IMAGE }}:latest
