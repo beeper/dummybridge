@@ -4,7 +4,7 @@ go 1.22
 
 require (
 	go.mau.fi/util v0.6.1-0.20240719175439-20a6073e1dd4
-	maunium.net/go/mautrix v0.19.1-0.20240726171246-426921e00a7c
+	maunium.net/go/mautrix v0.19.1-0.20240727220844-3ba566d182fe
 )
 
 require (
