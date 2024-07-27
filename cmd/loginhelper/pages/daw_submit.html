@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Dummybridge display & wait login</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <script>
+        function normalizeCrockfordBase32(input) {
+            return input.toUpperCase()
+                .replace("O", "0")
+                .replace("I", "1")
+                .replace("L", "1")
+                .replace("_", "-")
+                .replace(/[^0123456789ABCDEFGHJKMNPQRSTVWXYZ-]/, "")
+        }
+        function submitToWaiter() {
+            const reqID = document.getElementById("reqid").value
+            fetch(`../api/daw_submit/${reqID}`, {
+                method: "POST",
+                body: JSON.stringify({
+                    username: document.getElementById("username").value,
+                    password: document.getElementById("password").value
+                }),
+                headers: {
+                    "Content-Type": "application/json"
+                },
+            }).catch(err => alert(err))
+        }
+    </script>
+    <style>
+        div {
+            margin-bottom: 10px;
+        }
+        input {
+            padding: 8px;
+        }
+        button {
+            padding: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div>
+        <label for="reqid">Request ID:</label>
+        <input type="text" id="reqid" oninput="this.value = normalizeCrockfordBase32(this.value)" placeholder="ABC-123-DEF"/>
+    </div>
+
+    <div>
+        <label for="username">Username:</label>
+        <input type="text" id="username" placeholder="Username"/>
+    </div>
+
+    <div>
+        <label for="password">Password:</label>
+        <input type="password" id="password" placeholder="Password"/>
+    </div>
+
+    <button id="login" onClick="submitToWaiter()">Submit to waiter</button>
+</body>
+</html>

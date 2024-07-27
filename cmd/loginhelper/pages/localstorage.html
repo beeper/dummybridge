@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Dummybridge localstorage login</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <script>
+        function saveToLocalstorage() {
+            localStorage.setItem("username", document.getElementById("username").value)
+            localStorage.setItem("password", document.getElementById("password").value)
+        }
+    </script>
+    <style>
+        div {
+            margin-bottom: 10px;
+        }
+        input {
+            padding: 8px;
+        }
+        button {
+            padding: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div>
+        <label for="username">Username:</label>
+        <input type="text" id="username" placeholder="Username"/>
+    </div>
+
+    <div>
+        <label for="password">Password:</label>
+        <input type="password" id="password" placeholder="Password"/>
+    </div>
+
+    <button id="login" onClick="saveToLocalstorage()">Save to cookies</button>
+</body>
+</html>

@@ -58,9 +58,21 @@ func (dc *DummyConnector) GetLoginFlows() []bridgev2.LoginFlow {
 		Name:        "Password",
 		Description: "Log in with a password",
 		ID:          "password",
+	}, {
+		Name:        "Cookies",
+		Description: "Log in with extracted cookies",
+		ID:          "cookies",
+	}, {
+		Name:        "Local storage",
+		Description: "Log in with extracted local storage",
+		ID:          "localstorage",
+	}, {
+		Name:        "Display and wait",
+		Description: "Log in through a remote server",
+		ID:          "displayandwait",
 	}}
 }
 
 func (dc *DummyConnector) CreateLogin(ctx context.Context, user *bridgev2.User, flowID string) (bridgev2.LoginProcess, error) {
-	return &DummyLogin{User: user}, nil
+	return &DummyLogin{User: user, FlowID: flowID}, nil
 }
