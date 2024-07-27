@@ -25,7 +25,7 @@
     </style>
 </head>
 <body>
-    <form onsubmit="saveToLocalstorage()">
+    <form onsubmit="event.preventDefault();saveToLocalstorage()">
         <div>
             <label for="username">Username:</label>
             <input type="text" id="username" placeholder="Username"/>
