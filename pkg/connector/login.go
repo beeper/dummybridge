@@ -49,7 +49,7 @@ func (dl *DummyLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 			StepID:       "com.beeper.dummy.cookies",
 			Instructions: "",
 			CookiesParams: &bridgev2.LoginCookiesParams{
-				URL: "https://random.mau.fi/dummy/page/cookies.html",
+				URL: "https://random.mau.fi/dummy/pages/cookies.html",
 				Fields: []bridgev2.LoginCookieField{{
 					ID:       "username",
 					Required: true,
@@ -75,7 +75,7 @@ func (dl *DummyLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 			StepID:       "com.beeper.dummy.localstorage",
 			Instructions: "",
 			CookiesParams: &bridgev2.LoginCookiesParams{
-				URL: "https://random.mau.fi/dummy/page/localstorage.html",
+				URL: "https://random.mau.fi/dummy/pages/localstorage.html",
 				Fields: []bridgev2.LoginCookieField{{
 					ID:       "username",
 					Required: true,
@@ -98,7 +98,7 @@ func (dl *DummyLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 		return &bridgev2.LoginStep{
 			Type:         bridgev2.LoginStepTypeDisplayAndWait,
 			StepID:       "com.beeper.dummy.displayandwait",
-			Instructions: "Enter the code on https://random.mau.fi/dummy/page/daw_submit.html",
+			Instructions: "Enter the code on https://random.mau.fi/dummy/pages/daw_submit.html",
 			DisplayAndWaitParams: &bridgev2.LoginDisplayAndWaitParams{
 				Type: bridgev2.LoginDisplayTypeCode,
 				Data: dl.DAWID,
