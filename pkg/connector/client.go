@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"go.mau.fi/util/ptr"
 	"go.mau.fi/util/random"
 
 	"maunium.net/go/mautrix/bridgev2"
@@ -95,14 +96,14 @@ func (dc *DummyClient) ResolveIdentifier(ctx context.Context, identifier string,
 					Sender:   networkid.UserID(dc.UserLogin.ID),
 				},
 				Membership: event.MembershipJoin,
-				PowerLevel: 50,
+				PowerLevel: ptr.Ptr(50),
 			},
 			{
 				EventSender: bridgev2.EventSender{
 					Sender: userID,
 				},
 				Membership: event.MembershipJoin,
-				PowerLevel: 50,
+				PowerLevel: ptr.Ptr(50),
 			},
 		},
 	}

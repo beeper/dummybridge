@@ -3,6 +3,7 @@ package connector
 import (
 	"strconv"
 
+	"go.mau.fi/util/ptr"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/commands"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -44,7 +45,7 @@ var NewRoomCommand = &commands.FullHandler{
 							Sender:   networkid.UserID(login.ID),
 						},
 						Membership: event.MembershipJoin,
-						PowerLevel: 100,
+						PowerLevel: ptr.Ptr(100),
 					},
 				},
 			},
