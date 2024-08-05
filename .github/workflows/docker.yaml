@@ -7,7 +7,7 @@ on:
 
 env:
   BEEPER_BRIDGE_TYPE: dummybridge
-  CI_REGISTRY_IMAGE: "${{ secrets.CI_REGISTRY }}/bridge/dummybridgego"
+  CI_REGISTRY_IMAGE: "${{ secrets.CI_REGISTRY }}/bridge/dummybridge"
   GHCR_REGISTRY: ghcr.io
   GHCR_REGISTRY_IMAGE: "ghcr.io/${{ github.repository }}/go"
   GHCR_REGISTRY_LOGINHELPER_IMAGE: "ghcr.io/${{ github.repository }}/loginhelper"
