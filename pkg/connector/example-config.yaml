@@ -1,0 +1,20 @@
+# Automation options
+automation:
+    # Open management room for admins
+    open_management_room: false
+    # Login admins automatically
+    login: false
+
+    # Portal automation for admins
+    portals:
+        # How many portals to create
+        count: 0
+        # How many members are initially in a portal
+        members: 0
+        # How many messages are initially sent to the portal
+        messages: 0
+
+    # Backfill automation
+    backfill:
+        # How long to do first startup infinite backfill
+        timelimit: 0s

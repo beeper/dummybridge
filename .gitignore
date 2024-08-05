@@ -1,3 +1,4 @@
 *.db*
 *.yaml
 *.log
+!example-config.yaml

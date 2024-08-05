@@ -3,10 +3,8 @@ package connector
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"go.mau.fi/util/ptr"
-	"go.mau.fi/util/random"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -16,14 +14,7 @@ import (
 
 type DummyClient struct {
 	UserLogin *bridgev2.UserLogin
-}
-
-func randomPortalID() networkid.PortalID {
-	return networkid.PortalID(strings.ToLower(random.String(32)))
-}
-
-func randomUserID() networkid.UserID {
-	return networkid.UserID(strings.ToLower(random.String(32)))
+	Connector *DummyConnector
 }
 
 var _ bridgev2.NetworkAPI = (*DummyClient)(nil)

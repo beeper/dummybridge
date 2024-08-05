@@ -3,10 +3,7 @@ package connector
 import (
 	"strconv"
 
-	"go.mau.fi/util/ptr"
-	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/commands"
-	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
 )
 
@@ -17,57 +14,14 @@ var AllCommands = []commands.CommandHandler{
 }
 
 var DummyHelpsection = commands.HelpSection{
-	Name: "Dummy",
+	Name:  "Dummy",
 	Order: 99,
 }
 
 var NewRoomCommand = &commands.FullHandler{
 	Func: func(e *commands.Event) {
 		login := e.User.GetDefaultLogin()
-		portalID := randomPortalID()
-		portalKey := networkid.PortalKey{
-			ID:       portalID,
-			Receiver: login.ID,
-		}
-
-		portal, err := e.Bridge.GetPortalByKey(e.Ctx, portalKey)
-		if err != nil {
-			e.Reply(err.Error())
-			return
-		}
-
-		chatInfo := bridgev2.ChatInfo{
-			Members: &bridgev2.ChatMemberList{
-				Members: []bridgev2.ChatMember{
-					{
-						EventSender: bridgev2.EventSender{
-							IsFromMe: true,
-							Sender:   networkid.UserID(login.ID),
-						},
-						Membership: event.MembershipJoin,
-						PowerLevel: ptr.Ptr(100),
-					},
-				},
-			},
-		}
-
-		for i := 0; i < 10; i++ {
-			userID := randomUserID()
-			_, err := e.Bridge.GetGhostByID(e.Ctx, userID)
-			if err != nil {
-				e.Reply(err.Error())
-				return
-			}
-
-			chatInfo.Members.Members = append(chatInfo.Members.Members, bridgev2.ChatMember{
-				EventSender: bridgev2.EventSender{
-					Sender: userID,
-				},
-				Membership: event.MembershipJoin,
-			})
-		}
-
-		err = portal.CreateMatrixRoom(e.Ctx, login, &chatInfo)
+		portal, err := generatePortal(e.Ctx, e.Bridge, login, 1)
 		if err != nil {
 			e.Reply(err.Error())
 			return
