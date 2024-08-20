@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"time"
 
@@ -33,7 +34,7 @@ func (dc *DummyClient) FetchMessages(ctx context.Context, fetchParams bridgev2.F
 	}
 
 	for i := 0; i < fetchParams.Count; i++ {
-		sender := stablePortalUserIDByIndex(fetchParams.Portal.ID, rand.Intn(dc.Connector.Config.Automation.Portals.Members))
+		sender := stablePortalUserIDByIndex(fetchParams.Portal.ID, rand.Intn((int)(math.Max(1, (float64)(dc.Connector.Config.Automation.Portals.Members)))))
 		_, err := dc.UserLogin.Bridge.GetGhostByID(ctx, sender)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get ghost by id: %w", err)
