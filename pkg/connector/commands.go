@@ -20,6 +20,7 @@ var AllCommands = []commands.CommandHandler{
 	MessagesCommand,
 	FileCommand,
 	CatCommand,
+	CatAvatarCommand,
 }
 
 var DummyHelpsection = commands.HelpSection{
@@ -322,6 +323,60 @@ var CatCommand = &commands.FullHandler{
 	Name: "cat",
 	Help: commands.HelpMeta{
 		Description: "You know if you need one",
+		Section:     DummyHelpsection,
+	},
+}
+
+var CatAvatarCommand = &commands.FullHandler{
+	Func: func(e *commands.Event) {
+		e.Log.Debug().Msg("Searching for cat")
+
+		catDesc, err := searchCat(e.Ctx)
+		if err != nil {
+			e.Reply(err.Error())
+			return
+		}
+
+		mediaMime, mediaData, err := getCat(e.Ctx, catDesc.URL)
+		if err != nil {
+			e.Reply(err.Error())
+			return
+		}
+
+		mediaName := catDesc.ID
+		if strings.Contains(mediaMime, "png") {
+			mediaName = mediaName + ".png"
+		} else if strings.Contains(mediaMime, "jp") {
+			mediaName = mediaName + ".jpg"
+		} else if strings.Contains(mediaMime, "gif") {
+			mediaName = mediaName + ".gif"
+		} else if !strings.HasPrefix(mediaMime, "image/") {
+			e.Reply("Failed to get a cat: %s", mediaMime)
+			return
+		}
+
+		e.Log.Debug().Msg("Uploading cat")
+		url, _, err := e.Bot.UploadMedia(e.Ctx, e.RoomID, mediaData, mediaName, mediaMime)
+		if err != nil {
+			e.Reply(err.Error())
+			return
+		}
+
+		e.Log.Debug().Msg("Sending cat state")
+		content := event.Content{
+			Parsed: &event.RoomAvatarEventContent{
+				URL: url,
+			},
+		}
+		_, err = e.Bot.SendState(e.Ctx, e.RoomID, event.StateRoomAvatar, "", &content, time.Now())
+		if err != nil {
+			e.Reply(err.Error())
+			return
+		}
+	},
+	Name: "cat-avatar",
+	Help: commands.HelpMeta{
+		Description: "Make this room look like a cat",
 		Section:     DummyHelpsection,
 	},
 }
