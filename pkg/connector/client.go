@@ -6,6 +6,7 @@ import (
 
 	"go.mau.fi/util/ptr"
 
+	"maunium.net/go/mautrix/bridge/status"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -21,6 +22,10 @@ var _ bridgev2.NetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.IdentifierResolvingNetworkAPI = (*DummyClient)(nil)
 
 func (dc *DummyClient) Connect(ctx context.Context) error {
+	state := status.BridgeState{
+		StateEvent: status.StateConnected,
+	}
+	dc.UserLogin.BridgeState.Send(state)
 	return nil
 }
 
