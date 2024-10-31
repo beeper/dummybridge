@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -10,11 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"maunium.net/go/mautrix/bridge/status"
 	"maunium.net/go/mautrix/bridgev2/commands"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
 var AllCommands = []commands.CommandHandler{
+	SendStateCommand,
 	NewRoomCommand,
 	GhostsCommand,
 	MessagesCommand,
@@ -26,6 +30,42 @@ var AllCommands = []commands.CommandHandler{
 var DummyHelpsection = commands.HelpSection{
 	Name:  "Dummy",
 	Order: 99,
+}
+
+var SendStateCommand = &commands.FullHandler{
+	Func: func(e *commands.Event) {
+		if len(e.Args) == 0 {
+			e.Reply("Missing state argument")
+			return
+		}
+
+		stateEvent := status.BridgeStateEvent(e.Args[0])
+		state := status.BridgeState{
+			StateEvent: stateEvent,
+			RemoteID:   "*",
+		}
+
+		for userID, perm := range e.Bridge.Config.Permissions {
+			if !perm.Admin {
+				continue
+			}
+			user, err := e.Bridge.GetUserByMXID(context.Background(), id.UserID(userID))
+			if err != nil {
+				e.Reply(fmt.Sprintf("Error getting user: %s", err.Error()))
+				return
+			}
+			user.GetDefaultLogin().BridgeState.Send(state)
+		}
+
+		e.Reply("Generated states")
+	},
+	Name: "send-state",
+	Help: commands.HelpMeta{
+		Description: "Send bridge states",
+		Args:        "[sevent]",
+		Section:     DummyHelpsection,
+	},
+	RequiresLogin: true,
 }
 
 var NewRoomCommand = &commands.FullHandler{
