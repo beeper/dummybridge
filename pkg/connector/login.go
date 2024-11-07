@@ -7,13 +7,19 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/rs/zerolog/log"
+	"go.mau.fi/util/jsontime"
 	"go.mau.fi/util/random"
+	"maunium.net/go/mautrix/bridge/status"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 )
 
 type DummyLogin struct {
+	br *bridgev2.Bridge
+
+	Config Config
 	User   *bridgev2.User
 	FlowID string
 	DAWID  string
@@ -140,20 +146,38 @@ func (dl *DummyLogin) Wait(ctx context.Context) (*bridgev2.LoginStep, error) {
 }
 
 func (dl *DummyLogin) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
-	ul, err := dl.User.NewLogin(ctx, &database.UserLogin{
+	login, err := dl.User.NewLogin(ctx, &database.UserLogin{
 		ID:         networkid.UserLoginID(input["username"]),
-		RemoteName: input["username"],
+		RemoteName: input["password"],
 	}, &bridgev2.NewLoginParams{})
 	if err != nil {
 		return nil, err
 	}
+
+	go func() {
+		log.Info().Int("portals", dl.Config.Automation.Portals.Count).Msg("Generating portals after login")
+		for range dl.Config.Automation.Portals.Count {
+			_, err = generatePortal(ctx, dl.br, login, dl.Config.Automation.Portals.Members)
+			if err != nil {
+				panic(err)
+			}
+		}
+		state := status.BridgeState{
+			UserID:     login.UserMXID,
+			RemoteName: login.RemoteName,
+			StateEvent: status.StateConnected,
+			Timestamp:  jsontime.UnixNow(),
+		}
+		login.BridgeState.Send(state)
+	}()
+
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeComplete,
 		StepID:       "com.beeper.dummy.complete",
 		Instructions: "Successfully logged in with whatever you provided",
 		CompleteParams: &bridgev2.LoginCompleteParams{
-			UserLoginID: ul.ID,
-			UserLogin:   ul,
+			UserLoginID: login.ID,
+			UserLogin:   login,
 		},
 	}, nil
 }

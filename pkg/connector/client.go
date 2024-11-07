@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"go.mau.fi/util/jsontime"
 	"go.mau.fi/util/ptr"
 
 	"maunium.net/go/mautrix/bridge/status"
@@ -23,7 +24,10 @@ var _ bridgev2.IdentifierResolvingNetworkAPI = (*DummyClient)(nil)
 
 func (dc *DummyClient) Connect(ctx context.Context) error {
 	state := status.BridgeState{
+		UserID:     dc.UserLogin.UserMXID,
+		RemoteName: dc.UserLogin.RemoteName,
 		StateEvent: status.StateConnected,
+		Timestamp:  jsontime.UnixNow(),
 	}
 	dc.UserLogin.BridgeState.Send(state)
 	return nil
