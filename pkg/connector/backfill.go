@@ -52,7 +52,8 @@ func (dc *DummyClient) FetchMessages(ctx context.Context, fetchParams bridgev2.F
 					},
 				},
 			},
-			Timestamp: nextTs,
+			Timestamp:   nextTs,
+			StreamOrder: time.Now().UnixNano(),
 			Sender: bridgev2.EventSender{
 				Sender: sender,
 			},
