@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"time"
 
 	"maunium.net/go/mautrix/bridgev2"
@@ -65,5 +66,10 @@ func (dc *DummyClient) FetchMessages(ctx context.Context, fetchParams bridgev2.F
 
 	// always claim we have more until timelimit is hit
 	resp.HasMore = true
+
+	if os.Getenv("DUMMY_MARK_READ") != "" {
+		resp.MarkRead = true
+	}
+
 	return
 }
