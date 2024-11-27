@@ -149,6 +149,10 @@ func (dl *DummyLogin) SubmitUserInput(ctx context.Context, input map[string]stri
 	login, err := dl.User.NewLogin(ctx, &database.UserLogin{
 		ID:         networkid.UserLoginID(input["username"]),
 		RemoteName: input["password"],
+		RemoteProfile: status.RemoteProfile{
+			Name:  input["password"],
+			Email: "dummy-email-" + random.String(6) + "@beepbeep",
+		},
 	}, &bridgev2.NewLoginParams{})
 	if err != nil {
 		return nil, err
@@ -163,11 +167,10 @@ func (dl *DummyLogin) SubmitUserInput(ctx context.Context, input map[string]stri
 			}
 		}
 		state := status.BridgeState{
-			UserID:     login.UserMXID,
-			RemoteName: login.RemoteName,
 			StateEvent: status.StateConnected,
 			Timestamp:  jsontime.UnixNow(),
 		}
+
 		login.BridgeState.Send(state)
 	}()
 
