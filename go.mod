@@ -7,7 +7,7 @@ toolchain go1.23.2
 require (
 	github.com/rs/zerolog v1.33.0
 	go.mau.fi/util v0.8.2
-	maunium.net/go/mautrix v0.22.1-0.20241126202918-4b970e0ea7e6
+	maunium.net/go/mautrix v0.22.1-0.20241202131110-166ba04aae02
 )
 
 require (

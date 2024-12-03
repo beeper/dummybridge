@@ -22,7 +22,7 @@ type DummyClient struct {
 var _ bridgev2.NetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.IdentifierResolvingNetworkAPI = (*DummyClient)(nil)
 
-func (dc *DummyClient) Connect(ctx context.Context) error {
+func (dc *DummyClient) Connect(ctx context.Context) {
 	state := status.BridgeState{
 		UserID:     dc.UserLogin.UserMXID,
 		RemoteName: dc.UserLogin.RemoteName,
@@ -30,7 +30,6 @@ func (dc *DummyClient) Connect(ctx context.Context) error {
 		Timestamp:  jsontime.UnixNow(),
 	}
 	dc.UserLogin.BridgeState.Send(state)
-	return nil
 }
 
 func (dc *DummyClient) Disconnect() {}
