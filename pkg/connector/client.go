@@ -40,8 +40,8 @@ func (dc *DummyClient) IsLoggedIn() bool {
 
 func (dc *DummyClient) LogoutRemote(ctx context.Context) {}
 
-func (dc *DummyClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *bridgev2.NetworkRoomCapabilities {
-	return &bridgev2.NetworkRoomCapabilities{}
+func (dc *DummyClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
+	return &event.RoomFeatures{}
 }
 
 func (dc *DummyClient) IsThisUser(ctx context.Context, userID networkid.UserID) bool {
