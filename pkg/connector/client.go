@@ -3,18 +3,22 @@ package connector
 import (
 	"context"
 	"fmt"
+	"sync"
 
+	"github.com/rs/zerolog/log"
 	"go.mau.fi/util/jsontime"
 	"go.mau.fi/util/ptr"
 
-	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/event"
 )
 
 type DummyClient struct {
+	wg sync.WaitGroup
+
 	UserLogin *bridgev2.UserLogin
 	Connector *DummyConnector
 }
@@ -30,9 +34,27 @@ func (dc *DummyClient) Connect(ctx context.Context) {
 		Timestamp:  jsontime.UnixNow(),
 	}
 	dc.UserLogin.BridgeState.Send(state)
+
+	dc.wg.Add(1)
+	go func() {
+		log.Info().Int("portals", dc.Connector.Config.Automation.Portals.Count).Msg("Generating portals after login")
+		for range dc.Connector.Config.Automation.Portals.Count {
+			if _, err := generatePortal(
+				ctx,
+				dc.Connector.br,
+				dc.UserLogin,
+				dc.Connector.Config.Automation.Portals.Members,
+			); err != nil {
+				panic(err)
+			}
+		}
+		dc.wg.Done()
+	}()
 }
 
-func (dc *DummyClient) Disconnect() {}
+func (dc *DummyClient) Disconnect() {
+	dc.wg.Wait()
+}
 
 func (dc *DummyClient) IsLoggedIn() bool {
 	return true
