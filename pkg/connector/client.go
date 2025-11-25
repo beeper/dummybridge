@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -37,6 +38,7 @@ func (dc *DummyClient) Connect(ctx context.Context) {
 
 	dc.wg.Add(1)
 	go func() {
+		defer dc.wg.Done()
 		log.Info().Int("portals", dc.Connector.Config.Automation.Portals.Count).Msg("Generating portals after login")
 		for range dc.Connector.Config.Automation.Portals.Count {
 			if _, err := generatePortal(
@@ -44,11 +46,12 @@ func (dc *DummyClient) Connect(ctx context.Context) {
 				dc.Connector.br,
 				dc.UserLogin,
 				dc.Connector.Config.Automation.Portals.Members,
-			); err != nil {
+			); errors.Is(err, context.Canceled) {
+				return
+			} else if err != nil {
 				panic(err)
 			}
 		}
-		dc.wg.Done()
 	}()
 }
 
