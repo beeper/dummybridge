@@ -128,8 +128,7 @@ func (dc *DummyClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal)
 	}
 
 	chatInfo := &bridgev2.ChatInfo{
-		Type:        ptr.Ptr(roomType),
-		CanBackfill: true,
+		Type: ptr.Ptr(roomType),
 	}
 
 	if portal.Name == "" {
