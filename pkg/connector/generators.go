@@ -8,6 +8,7 @@ import (
 	"go.mau.fi/util/ptr"
 	"go.mau.fi/util/random"
 	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
 )
@@ -40,7 +41,21 @@ func generatePortal(ctx context.Context, br *bridgev2.Bridge, login *bridgev2.Us
 		return nil, fmt.Errorf("failed to get portal by key: %w", err)
 	}
 
+	portalIDPrefix := string(portalID)
+	if len(portalIDPrefix) > 6 {
+		portalIDPrefix = portalIDPrefix[:6]
+	}
+	portalName := fmt.Sprintf("Dummy Portal %s", portalIDPrefix)
+	portalTopic := "DummyBridge test portal"
+	roomType := database.RoomTypeDM
+	if members > 1 {
+		roomType = database.RoomTypeGroupDM
+	}
+
 	chatInfo := bridgev2.ChatInfo{
+		Name:        ptr.Ptr(portalName),
+		Topic:       ptr.Ptr(portalTopic),
+		Type:        ptr.Ptr(roomType),
 		CanBackfill: true,
 		Members: &bridgev2.ChatMemberList{
 			Members: []bridgev2.ChatMember{

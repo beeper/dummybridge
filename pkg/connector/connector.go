@@ -53,7 +53,7 @@ func (dc *DummyConnector) GetBridgeInfoVersion() (info, caps int) {
 
 func (dc *DummyConnector) GetName() bridgev2.BridgeName {
 	return bridgev2.BridgeName{
-		DisplayName:      "Dummy",
+		DisplayName:      "Dummy Bridge",
 		NetworkURL:       "https://beeper.com",
 		NetworkIcon:      "mxc://beeper.com/f6ec13a4953757f04c1714b43d1c8ec451e0bab1",
 		NetworkID:        "dummy",
