@@ -59,6 +59,10 @@ var dummyRoomCaps = &event.RoomFeatures{
 	ReadReceipts:        true,
 	TypingNotifications: true,
 
+	MessageRequest: &event.MessageRequestFeatures{
+		AcceptWithButton: event.CapLevelFullySupported,
+	},
+
 	DeleteChat: true,
 }
 
@@ -101,13 +105,7 @@ func (dc *DummyClient) IsLoggedIn() bool {
 func (dc *DummyClient) LogoutRemote(ctx context.Context) {}
 
 func (dc *DummyClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
-	caps := *dummyRoomCaps
-	if portal != nil && portal.MessageRequest {
-		caps.MessageRequest = &event.MessageRequestFeatures{
-			AcceptWithButton: event.CapLevelFullySupported,
-		}
-	}
-	return &caps
+	return dummyRoomCaps
 }
 
 func (dc *DummyClient) IsThisUser(ctx context.Context, userID networkid.UserID) bool {
