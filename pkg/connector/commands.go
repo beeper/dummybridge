@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/bridgev2/commands"
+	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
@@ -20,6 +20,8 @@ import (
 var AllCommands = []commands.CommandHandler{
 	SendStateCommand,
 	NewRoomCommand,
+	NewRequestDMCommand,
+	NewRequestGroupCommand,
 	GhostsCommand,
 	MessagesCommand,
 	FileCommand,
