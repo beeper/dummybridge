@@ -78,8 +78,16 @@ Once DummyBridge is launched, you can interact with it using various login flows
    - A code will be generated, which you need to enter on the `/pages/daw_submit.html` page.
 
 DummyBridge supports several commands for testing purposes, such as creating new rooms,
-generating ghosts, and sending messages. These commands can be executed within the bridge's
-management room.
+ generating ghosts, and sending messages. These commands can be executed within the bridge's
+ management room.
+
+### Kick simulation
+
+To simulate being kicked from a portal room (so clients can test “kicked from room” behavior), use:
+
+- In a portal room: `!dummy kick-me [reason...]`
+- From the management room: `!dummy doin <room_id> kick-me [reason...]`
+
 
 ## License
 

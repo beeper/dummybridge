@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2/commands"
+	bridgeMatrix "maunium.net/go/mautrix/bridgev2/matrix"
 	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
@@ -25,6 +27,7 @@ var AllCommands = []commands.CommandHandler{
 	GhostsCommand,
 	MessagesCommand,
 	FileCommand,
+	KickMeCommand,
 	CatCommand,
 	CatAvatarCommand,
 }
@@ -210,6 +213,74 @@ var FileCommand = &commands.FullHandler{
 		Description: "Create boring file events in room",
 		Section:     DummyHelpsection,
 	},
+}
+
+var KickMeCommand = &commands.FullHandler{
+	Func: func(e *commands.Event) {
+		portal := e.Portal
+		args := e.Args
+
+		// Allow using this from the management room by specifying a room ID.
+		if portal == nil {
+			if len(args) == 0 {
+				e.Reply("Usage: `$cmdprefix kick-me [reason...]` (in a portal room) or `$cmdprefix kick-me <room_id> [reason...]`")
+				return
+			}
+			if !strings.HasPrefix(args[0], "!") {
+				e.Reply("Usage: `$cmdprefix kick-me [reason...]` (in a portal room) or `$cmdprefix kick-me <room_id> [reason...]`")
+				return
+			}
+			candidateRoomID := id.RoomID(args[0])
+			var err error
+			portal, err = e.Bridge.GetPortalByMXID(e.Ctx, candidateRoomID)
+			if err != nil {
+				e.Reply("Failed to get portal for room: %s", err)
+				return
+			} else if portal == nil {
+				e.Reply("Room %s is not a portal room", candidateRoomID)
+				return
+			}
+			args = args[1:]
+		}
+
+		kickerRemoteID := stablePortalUserIDByIndex(portal.ID, 0)
+		ghost, err := e.Bridge.GetGhostByID(e.Ctx, kickerRemoteID)
+		if err != nil {
+			e.Reply("Failed to get ghost kicker: %s", err)
+			return
+		}
+
+		if err := ghost.Intent.EnsureJoined(e.Ctx, portal.MXID); err != nil {
+			e.Reply("Failed to join ghost kicker to room: %s", err)
+			return
+		}
+
+		asIntent, ok := ghost.Intent.(*bridgeMatrix.ASIntent)
+		if !ok {
+			e.Reply("Unsupported ghost intent type: %T", ghost.Intent)
+			return
+		}
+
+		// Best-effort: ensure the ghost has high enough PL to kick.
+		// The kick itself is sent as a custom membership event so this generally isn't required,
+		// but it makes behavior closer to a real kick flow.
+		_, _ = asIntent.Matrix.SetPowerLevel(e.Ctx, portal.MXID, asIntent.GetMXID(), 100)
+
+		reason := strings.TrimSpace(strings.Join(args, " "))
+		req := &mautrix.ReqKickUser{UserID: e.User.MXID, Reason: reason}
+		_, err = asIntent.Matrix.KickUser(e.Ctx, portal.MXID, req, map[string]interface{}{"com.beeper.dummybridge": true})
+		if err != nil {
+			e.Reply("Failed to kick you: %s", err)
+			return
+		}
+	},
+	Name: "kick-me",
+	Help: commands.HelpMeta{
+		Description: "Simulate being kicked from a portal room",
+		Args:        "[room_id] [reason...]",
+		Section:     DummyHelpsection,
+	},
+	RequiresLogin: true,
 }
 
 var catpions []string = []string{
