@@ -11,7 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"go.mau.fi/util/ptr"
+
+	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/commands"
+	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
@@ -24,6 +29,7 @@ var AllCommands = []commands.CommandHandler{
 	NewRequestGroupCommand,
 	GhostsCommand,
 	MessagesCommand,
+	KickMeCommand,
 	FileCommand,
 	CatCommand,
 	CatAvatarCommand,
@@ -164,6 +170,70 @@ var MessagesCommand = &commands.FullHandler{
 	Help: commands.HelpMeta{
 		Description: "Create messages in a room",
 		Args:        "[nmsgs]",
+		Section:     DummyHelpsection,
+	},
+	RequiresLogin: true,
+}
+
+var KickMeCommand = &commands.FullHandler{
+	Func: func(e *commands.Event) {
+		if e.Portal == nil {
+			e.Reply("Can only do this within a portal")
+			return
+		}
+		login := e.User.GetDefaultLogin()
+		if login == nil {
+			e.Reply("No login")
+			return
+		}
+
+		reason := strings.TrimSpace(strings.Join(e.Args, " "))
+
+		// Use the bridge bot as the Matrix sender for the membership update.
+		// This simulates the user being kicked (not voluntarily leaving).
+		eventMeta := simplevent.EventMeta{
+			Type:      bridgev2.RemoteEventChatInfoChange,
+			PortalKey: e.Portal.PortalKey,
+			Sender:    bridgev2.EventSender{IsFromMe: false},
+			Timestamp: time.Now(),
+			// Unique-ish ordering for this fake event.
+			StreamOrder: time.Now().UnixNano(),
+		}
+
+		memberEventExtra := map[string]any(nil)
+		if reason != "" {
+			memberEventExtra = map[string]any{"reason": reason}
+		}
+
+		changes := &bridgev2.ChatMemberList{MemberMap: bridgev2.ChatMemberMap{}}
+		changes.MemberMap.Set(bridgev2.ChatMember{
+			EventSender: bridgev2.EventSender{
+				IsFromMe:    true,
+				SenderLogin: login.ID,
+				Sender:      networkid.UserID(login.ID),
+			},
+			Membership:       event.MembershipLeave,
+			PowerLevel:       ptr.Ptr(50),
+			MemberEventExtra: memberEventExtra,
+		})
+
+		login.QueueRemoteEvent(&simplevent.ChatInfoChange{
+			EventMeta: eventMeta,
+			ChatInfoChange: &bridgev2.ChatInfoChange{
+				MemberChanges: changes,
+			},
+		})
+
+		if reason == "" {
+			e.Reply("Simulated being kicked (self membership -> leave)")
+		} else {
+			e.Reply("Simulated being kicked (self membership -> leave). Reason: %s", reason)
+		}
+	},
+	Name: "kick-me",
+	Help: commands.HelpMeta{
+		Description: "Simulate being kicked from this chat (self leave state, chat still exists)",
+		Args:        "[reason...]",
 		Section:     DummyHelpsection,
 	},
 	RequiresLogin: true,
