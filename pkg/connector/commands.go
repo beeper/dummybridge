@@ -11,7 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"go.mau.fi/util/ptr"
+
+	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/commands"
+	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
@@ -24,6 +29,7 @@ var AllCommands = []commands.CommandHandler{
 	NewRequestGroupCommand,
 	GhostsCommand,
 	MessagesCommand,
+	KickMeCommand,
 	FileCommand,
 	CatCommand,
 	CatAvatarCommand,
@@ -164,6 +170,56 @@ var MessagesCommand = &commands.FullHandler{
 	Help: commands.HelpMeta{
 		Description: "Create messages in a room",
 		Args:        "[nmsgs]",
+		Section:     DummyHelpsection,
+	},
+	RequiresLogin: true,
+}
+
+var KickMeCommand = &commands.FullHandler{
+	Func: func(e *commands.Event) {
+		if e.Portal == nil {
+			e.Reply("Can only do this within a portal")
+			return
+		}
+		login := e.User.GetDefaultLogin()
+		if login == nil {
+			e.Reply("No login")
+			return
+		}
+
+		eventMeta := simplevent.EventMeta{
+			Type:      bridgev2.RemoteEventChatInfoChange,
+			PortalKey: e.Portal.PortalKey,
+			Sender: bridgev2.EventSender{
+				IsFromMe: true,
+				Sender:   networkid.UserID(login.ID),
+			},
+			Timestamp:   time.Now(),
+			StreamOrder: time.Now().UnixNano(),
+		}
+
+		changes := &bridgev2.ChatMemberList{MemberMap: bridgev2.ChatMemberMap{}}
+		changes.MemberMap.Set(bridgev2.ChatMember{
+			EventSender: bridgev2.EventSender{
+				IsFromMe: true,
+				Sender:   networkid.UserID(login.ID),
+			},
+			Membership: event.MembershipLeave,
+			PowerLevel: ptr.Ptr(50),
+		})
+
+		login.QueueRemoteEvent(&simplevent.ChatInfoChange{
+			EventMeta: eventMeta,
+			ChatInfoChange: &bridgev2.ChatInfoChange{
+				MemberChanges: changes,
+			},
+		})
+
+		e.Reply("Simulated being kicked (self membership -> leave)")
+	},
+	Name: "kick-me",
+	Help: commands.HelpMeta{
+		Description: "Simulate being kicked from this chat (self leave state, chat still exists)",
 		Section:     DummyHelpsection,
 	},
 	RequiresLogin: true,
