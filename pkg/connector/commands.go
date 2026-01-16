@@ -208,7 +208,7 @@ var KickMeCommand = &commands.FullHandler{
 		changes := &bridgev2.ChatMemberList{MemberMap: bridgev2.ChatMemberMap{}}
 		changes.MemberMap.Set(bridgev2.ChatMember{
 			EventSender: bridgev2.EventSender{
-				IsFromMe:    false,
+				IsFromMe:    true,
 				SenderLogin: login.ID,
 				Sender:      networkid.UserID(login.ID),
 			},
