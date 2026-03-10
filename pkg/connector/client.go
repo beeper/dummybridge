@@ -178,7 +178,7 @@ func (dc *DummyClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 	if behavior.pending {
 		transactionID := getTransactionID(msg)
 		dbMessage := &database.Message{
-			ID:        randomMessageID(),
+			ID:        networkid.MessageID(transactionID),
 			SenderID:  networkid.UserID(dc.UserLogin.ID),
 			Timestamp: timestamp,
 		}
@@ -190,10 +190,7 @@ func (dc *DummyClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 		}, nil
 	}
 
-	messageID := randomMessageID()
-	if msg.Event != nil && msg.Event.Unsigned.TransactionID != "" {
-		messageID = networkid.MessageID(msg.Event.Unsigned.TransactionID)
-	}
+	messageID := networkid.MessageID(getTransactionID(msg))
 
 	return &bridgev2.MatrixMessageResponse{
 		DB: &database.Message{
@@ -278,10 +275,7 @@ func (dc *DummyClient) queueRemoteEcho(msg *bridgev2.MatrixMessage, transactionI
 
 func cloneMessageContent(content *event.MessageEventContent) *event.MessageEventContent {
 	if content == nil {
-		return &event.MessageEventContent{
-			MsgType: event.MsgText,
-			Body:    "",
-		}
+		return nil
 	}
 	cloned := *content
 	return &cloned
