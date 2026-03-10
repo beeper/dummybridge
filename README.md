@@ -11,6 +11,7 @@ and display-and-wait.
 ## Features
 
 - **Echo Bridge Functionality**: Acts as a simple echo bridge for testing.
+- **Per-Message Echo Controls**: Specific outbound messages can suppress or delay the remote echo.
 - **Login Flows**: Supports multiple login flows such as password, cookies, local storage,
   and display-and-wait.
 - **Automation**: Configurable automation options for management rooms, login, portals,
@@ -47,6 +48,13 @@ automation:
   backfill:
     timelimit: 0s # Duration for the initial startup infinite backfill, e.g. 10s, 1m, 1h
 ```
+
+To test slow or missing remote echoes, send trigger phrases in the message body:
+
+- `remote-echo none` keeps that send pending forever.
+- `remote-echo delay 5s` delays the remote echo for the parsed Go duration.
+
+Other messages keep the existing immediate-success behavior.
 
 ## Running
 
