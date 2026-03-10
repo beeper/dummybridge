@@ -178,7 +178,7 @@ func (dc *DummyClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 	if behavior.pending {
 		transactionID := getTransactionID(msg)
 		dbMessage := &database.Message{
-			ID:        networkid.MessageID(transactionID),
+			ID:        randomMessageID(),
 			SenderID:  networkid.UserID(dc.UserLogin.ID),
 			Timestamp: timestamp,
 		}
@@ -190,7 +190,10 @@ func (dc *DummyClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 		}, nil
 	}
 
-	messageID := networkid.MessageID(getTransactionID(msg))
+	messageID := randomMessageID()
+	if msg.Event != nil && msg.Event.Unsigned.TransactionID != "" {
+		messageID = networkid.MessageID(msg.Event.Unsigned.TransactionID)
+	}
 
 	return &bridgev2.MatrixMessageResponse{
 		DB: &database.Message{
