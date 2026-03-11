@@ -175,6 +175,9 @@ func (dc *DummyClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 	}
 
 	behavior := getRemoteEchoBehavior(msg.Content)
+	if behavior.fail {
+		return nil, errors.New("dummy remote echo failure")
+	}
 	if behavior.pending {
 		transactionID := getTransactionID(msg)
 		dbMessage := &database.Message{
@@ -215,6 +218,7 @@ func getTransactionID(msg *bridgev2.MatrixMessage) networkid.TransactionID {
 type remoteEchoBehavior struct {
 	pending bool
 	delay   time.Duration
+	fail    bool
 }
 
 func getRemoteEchoBehavior(content *event.MessageEventContent) remoteEchoBehavior {
@@ -224,6 +228,8 @@ func getRemoteEchoBehavior(content *event.MessageEventContent) remoteEchoBehavio
 	body := strings.TrimSpace(content.Body)
 	if strings.EqualFold(body, "remote-echo none") {
 		return remoteEchoBehavior{pending: true}
+	} else if strings.EqualFold(body, "remote-echo fail") {
+		return remoteEchoBehavior{fail: true}
 	}
 	matches := delayedRemoteEchoPattern.FindStringSubmatch(body)
 	if len(matches) != 2 {

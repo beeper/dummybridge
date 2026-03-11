@@ -13,9 +13,11 @@ func TestGetRemoteEchoBehavior(t *testing.T) {
 		body    string
 		pending bool
 		delay   time.Duration
+		fail    bool
 	}{
 		{name: "normal message", body: "hello", pending: false},
 		{name: "no echo trigger", body: "remote-echo none", pending: true},
+		{name: "fail trigger", body: "remote-echo fail", fail: true},
 		{name: "delay trigger", body: "remote-echo delay 5s", pending: true, delay: 5 * time.Second},
 		{name: "case insensitive", body: "REMOTE-ECHO DELAY 2m", pending: true, delay: 2 * time.Minute},
 	}
@@ -28,6 +30,9 @@ func TestGetRemoteEchoBehavior(t *testing.T) {
 			}
 			if got.delay != tc.delay {
 				t.Fatalf("delay = %s, want %s", got.delay, tc.delay)
+			}
+			if got.fail != tc.fail {
+				t.Fatalf("fail = %v, want %v", got.fail, tc.fail)
 			}
 		})
 	}

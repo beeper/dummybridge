@@ -51,7 +51,8 @@ automation:
 
 To test slow or missing remote echoes, send trigger phrases in the message body:
 
-- `remote-echo none` or `remote-echo delay 0s` keeps that send pending forever.
+- `remote-echo none` keeps that send pending forever.
+- `remote-echo fail` makes that send fail immediately with an error.
 - `remote-echo delay 5s` delays the remote echo for the parsed Go duration.
 
 Other messages keep the existing immediate-success behavior.
