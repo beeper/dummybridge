@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,12 +16,15 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/event"
 )
 
 type DummyClient struct {
-	wg sync.WaitGroup
+	wg   sync.WaitGroup
+	ctx  context.Context
+	stop context.CancelFunc
 
 	UserLogin *bridgev2.UserLogin
 	Connector *DummyConnector
@@ -30,6 +35,8 @@ var _ bridgev2.IdentifierResolvingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.BackfillingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.DeleteChatHandlingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.MessageRequestAcceptingNetworkAPI = (*DummyClient)(nil)
+
+var delayedRemoteEchoPattern = regexp.MustCompile(`(?i)^remote-echo\s+delay\s+([0-9]+(?:ms|s|m|h))$`)
 
 var dummyRoomCaps = &event.RoomFeatures{
 	ID: "com.beeper.dummy.capabilities",
@@ -67,6 +74,8 @@ var dummyRoomCaps = &event.RoomFeatures{
 }
 
 func (dc *DummyClient) Connect(ctx context.Context) {
+	dc.ctx, dc.stop = context.WithCancel(ctx)
+
 	state := status.BridgeState{
 		UserID:     dc.UserLogin.UserMXID,
 		RemoteName: dc.UserLogin.RemoteName,
@@ -81,7 +90,7 @@ func (dc *DummyClient) Connect(ctx context.Context) {
 		log.Info().Int("portals", dc.Connector.Config.Automation.Portals.Count).Msg("Generating portals after login")
 		for range dc.Connector.Config.Automation.Portals.Count {
 			if _, err := generatePortal(
-				ctx,
+				dc.ctx,
 				dc.Connector.br,
 				dc.UserLogin,
 				dc.Connector.Config.Automation.Portals.Members,
@@ -95,6 +104,9 @@ func (dc *DummyClient) Connect(ctx context.Context) {
 }
 
 func (dc *DummyClient) Disconnect() {
+	if dc.stop != nil {
+		dc.stop()
+	}
 	dc.wg.Wait()
 }
 
@@ -157,14 +169,33 @@ func (dc *DummyClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 		_ = msg.Portal.Save(ctx)
 	}
 
-	messageID := randomMessageID()
-	if msg.Event != nil && msg.Event.Unsigned.TransactionID != "" {
-		messageID = networkid.MessageID(msg.Event.Unsigned.TransactionID)
-	}
-
 	timestamp := time.Now()
 	if msg.Event != nil && msg.Event.Timestamp != 0 {
 		timestamp = time.UnixMilli(msg.Event.Timestamp)
+	}
+
+	behavior := getRemoteEchoBehavior(msg.Content)
+	if behavior.fail {
+		return nil, errors.New("dummy remote echo failure")
+	}
+	if behavior.pending {
+		transactionID := getTransactionID(msg)
+		dbMessage := &database.Message{
+			ID:        randomMessageID(),
+			SenderID:  networkid.UserID(dc.UserLogin.ID),
+			Timestamp: timestamp,
+		}
+		msg.AddPendingToSave(dbMessage, transactionID, nil)
+		dc.queueRemoteEcho(msg, transactionID, timestamp, behavior.delay)
+		return &bridgev2.MatrixMessageResponse{
+			DB:      dbMessage,
+			Pending: true,
+		}, nil
+	}
+
+	messageID := randomMessageID()
+	if msg.Event != nil && msg.Event.Unsigned.TransactionID != "" {
+		messageID = networkid.MessageID(msg.Event.Unsigned.TransactionID)
 	}
 
 	return &bridgev2.MatrixMessageResponse{
@@ -175,6 +206,88 @@ func (dc *DummyClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 		},
 		StreamOrder: time.Now().UnixNano(),
 	}, nil
+}
+
+func getTransactionID(msg *bridgev2.MatrixMessage) networkid.TransactionID {
+	if msg.Event != nil && msg.Event.Unsigned.TransactionID != "" {
+		return networkid.TransactionID(msg.Event.Unsigned.TransactionID)
+	}
+	return networkid.TransactionID(randomMessageID())
+}
+
+type remoteEchoBehavior struct {
+	pending bool
+	delay   time.Duration
+	fail    bool
+}
+
+func getRemoteEchoBehavior(content *event.MessageEventContent) remoteEchoBehavior {
+	if content == nil {
+		return remoteEchoBehavior{}
+	}
+	body := strings.TrimSpace(content.Body)
+	if strings.EqualFold(body, "remote-echo none") {
+		return remoteEchoBehavior{pending: true}
+	} else if strings.EqualFold(body, "remote-echo fail") {
+		return remoteEchoBehavior{fail: true}
+	}
+	matches := delayedRemoteEchoPattern.FindStringSubmatch(body)
+	if len(matches) != 2 {
+		return remoteEchoBehavior{}
+	}
+	delay, err := time.ParseDuration(matches[1])
+	if err != nil {
+		return remoteEchoBehavior{}
+	}
+	return remoteEchoBehavior{pending: true, delay: delay}
+}
+
+func (dc *DummyClient) queueRemoteEcho(msg *bridgev2.MatrixMessage, transactionID networkid.TransactionID, timestamp time.Time, delay time.Duration) {
+	if delay <= 0 || msg.Portal == nil {
+		return
+	}
+
+	dc.wg.Add(1)
+	go func() {
+		defer dc.wg.Done()
+
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+
+		select {
+		case <-dc.ctx.Done():
+			return
+		case <-timer.C:
+		}
+
+		dc.UserLogin.QueueRemoteEvent(&simplevent.PreConvertedMessage{
+			EventMeta: simplevent.EventMeta{
+				Type:      bridgev2.RemoteEventMessage,
+				PortalKey: msg.Portal.PortalKey,
+				Sender: bridgev2.EventSender{
+					IsFromMe:    true,
+					SenderLogin: dc.UserLogin.ID,
+					Sender:      networkid.UserID(dc.UserLogin.ID),
+				},
+				Timestamp:   timestamp,
+				StreamOrder: time.Now().UnixNano(),
+			},
+			Data: &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{{
+				Type:    event.EventMessage,
+				Content: cloneMessageContent(msg.Content),
+			}}},
+			ID:            randomMessageID(),
+			TransactionID: transactionID,
+		})
+	}()
+}
+
+func cloneMessageContent(content *event.MessageEventContent) *event.MessageEventContent {
+	if content == nil {
+		return nil
+	}
+	cloned := *content
+	return &cloned
 }
 
 func (dc *DummyClient) HandleMatrixDeleteChat(ctx context.Context, msg *bridgev2.MatrixDeleteChat) error {
