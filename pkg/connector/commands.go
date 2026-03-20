@@ -3,7 +3,6 @@ package connector
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -19,7 +18,6 @@ import (
 	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
 )
 
 var AllCommands = []commands.CommandHandler{
@@ -48,22 +46,7 @@ var SendStateCommand = &commands.FullHandler{
 		}
 
 		stateEvent := status.BridgeStateEvent(e.Args[0])
-		state := status.BridgeState{
-			StateEvent: stateEvent,
-			RemoteID:   "*",
-		}
-
-		for userID, perm := range e.Bridge.Config.Permissions {
-			if !perm.Admin {
-				continue
-			}
-			user, err := e.Bridge.GetUserByMXID(context.Background(), id.UserID(userID))
-			if err != nil {
-				e.Reply(fmt.Sprintf("Error getting user: %s", err.Error()))
-				return
-			}
-			user.GetDefaultLogin().BridgeState.Send(state)
-		}
+		e.User.GetDefaultLogin().BridgeState.Send(status.BridgeState{StateEvent: stateEvent})
 
 		e.Reply("Generated states")
 	},
