@@ -1,112 +1,124 @@
-package connector
+package dummybridge
 
 import (
 	"context"
-	_ "embed"
-	"time"
+	"net/http"
+	"strings"
+	"sync"
 
 	"go.mau.fi/util/configupgrade"
 	"maunium.net/go/mautrix/bridgev2"
-	"maunium.net/go/mautrix/bridgev2/commands"
 	"maunium.net/go/mautrix/bridgev2/database"
+	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/id"
+
+	"github.com/beeper/ai-chats/sdk"
 )
 
-type DummyConnector struct {
-	br      *bridgev2.Bridge
-	Started time.Time
+var (
+	_ bridgev2.NetworkConnector               = (*DummyBridgeConnector)(nil)
+	_ bridgev2.PortalBridgeInfoFillingNetwork = (*DummyBridgeConnector)(nil)
+)
 
-	Config Config
+type DummyBridgeConnector struct {
+	*sdk.ConnectorBase
+	br        *bridgev2.Bridge
+	Config    Config
+	sdkConfig *sdk.Config[*dummySession, *Config]
+
+	clientsMu sync.Mutex
+	clients   map[networkid.UserLoginID]bridgev2.NetworkAPI
+
+	chatMu sync.Mutex
 }
 
-type Config struct {
-	Automation struct {
-		Portals struct {
-			Count    int `yaml:"count"`
-			Members  int `yaml:"members"`
-			Messages int `yaml:"messages"`
-		} `yaml:"portals"`
-		Backfill struct {
-			Timelimit time.Duration `yaml:"timelimit"`
-		} `yaml:"backfill"`
-	} `yaml:"automation"`
-}
-
-var _ bridgev2.NetworkConnector = (*DummyConnector)(nil)
-
-func (dc *DummyConnector) Init(bridge *bridgev2.Bridge) {
-	dc.br = bridge
-	bridge.Commands.(*commands.Processor).AddHandlers(AllCommands...)
-}
-
-func (dc *DummyConnector) Start(ctx context.Context) error {
-	dc.Started = time.Now()
-	return nil
-}
-
-func (dc *DummyConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities {
-	return &bridgev2.NetworkGeneralCapabilities{}
-}
-
-func (dc *DummyConnector) GetBridgeInfoVersion() (info, caps int) {
-	return 0, 0
-}
-
-func (dc *DummyConnector) GetName() bridgev2.BridgeName {
-	return bridgev2.BridgeName{
-		DisplayName:      "Dummy",
-		NetworkURL:       "https://beeper.com",
-		NetworkIcon:      "mxc://beeper.com/f6ec13a4953757f04c1714b43d1c8ec451e0bab1",
-		NetworkID:        "dummy",
-		BeeperBridgeType: "beeper.com/dummy",
+func NewConnector() *DummyBridgeConnector {
+	dc := &DummyBridgeConnector{}
+	dc.sdkConfig = &sdk.Config[*dummySession, *Config]{
+		Name:             "dummybridge",
+		Description:      "DummyBridge demo bridge built with the AgentRemote SDK.",
+		ProtocolID:       "ai-dummybridge",
+		ProviderIdentity: sdk.ProviderIdentity{IDPrefix: "dummybridge", LogKey: "dummybridge_msg_id", StatusNetwork: "dummybridge"},
+		ClientCacheMu:    &dc.clientsMu,
+		ClientCache:      &dc.clients,
+		InitConnector: func(bridge *bridgev2.Bridge) {
+			dc.br = bridge
+		},
+		StartConnector: func(_ context.Context, _ *bridgev2.Bridge) error {
+			if dc.Config.Bridge.CommandPrefix == "" {
+				dc.Config.Bridge.CommandPrefix = "!dummybridge"
+			}
+			if dc.Config.DummyBridge.Enabled == nil {
+				enabled := true
+				dc.Config.DummyBridge.Enabled = &enabled
+			}
+			return nil
+		},
+		BridgeName: func() bridgev2.BridgeName {
+			defaultCommandPrefix := "!dummybridge"
+			if trimmed := strings.TrimSpace(dc.Config.Bridge.CommandPrefix); trimmed != "" {
+				defaultCommandPrefix = trimmed
+			}
+			return bridgev2.BridgeName{
+				DisplayName:          "DummyBridge",
+				NetworkURL:           "https://github.com/beeper/ai-chats",
+				NetworkIcon:          id.ContentURIString(""),
+				NetworkID:            "dummybridge",
+				BeeperBridgeType:     "dummybridge",
+				DefaultPort:          29349,
+				DefaultCommandPrefix: defaultCommandPrefix,
+			}
+		},
+		ExampleConfig:  exampleNetworkConfig,
+		ConfigData:     &dc.Config,
+		ConfigUpgrader: configupgrade.SimpleUpgrader(upgradeConfig),
+		DBMeta: func() database.MetaTypes {
+			return database.MetaTypes{
+				Portal:    func() any { return &PortalMetadata{} },
+				Message:   func() any { return &MessageMetadata{} },
+				UserLogin: func() any { return &UserLoginMetadata{} },
+				Ghost:     func() any { return &GhostMetadata{} },
+			}
+		},
+		AcceptLogin: func(login *bridgev2.UserLogin) (bool, string) {
+			if !strings.EqualFold(strings.TrimSpace(loginMetadata(login).Provider), ProviderDummyBridge) {
+				return false, "This bridge only supports DummyBridge logins."
+			}
+			if !dc.enabled() {
+				return false, "DummyBridge integration is disabled in the configuration."
+			}
+			return true, ""
+		},
+		LoginFlows: func() []bridgev2.LoginFlow {
+			if !dc.enabled() {
+				return nil
+			}
+			return []bridgev2.LoginFlow{{
+				ID:          ProviderDummyBridge,
+				Name:        "DummyBridge",
+				Description: "Create a synthetic demo login for turn and streaming tests.",
+			}}
+		}(),
+		CreateLogin: func(_ context.Context, user *bridgev2.User, flowID string) (bridgev2.LoginProcess, error) {
+			if flowID != ProviderDummyBridge {
+				return nil, bridgev2.ErrInvalidLoginFlowID
+			}
+			if !dc.enabled() {
+				return nil, sdk.NewLoginRespError(http.StatusForbidden, "This login flow is disabled.", "LOGIN", "DISABLED")
+			}
+			return &DummyBridgeLogin{User: user, Connector: dc}, nil
+		},
 	}
+	dc.sdkConfig.Agent = dummySDKAgent()
+	dc.sdkConfig.OnConnect = dc.onConnect
+	dc.sdkConfig.OnDisconnect = dc.onDisconnect
+	dc.sdkConfig.OnMessage = dc.onMessage
+	dc.sdkConfig.GetChatInfo = dc.getChatInfo
+	dc.sdkConfig.GetUserInfo = dc.getUserInfo
+	dc.ConnectorBase = sdk.NewConnectorBase(dc.sdkConfig)
+	return dc
 }
 
-func (dc *DummyConnector) GetDBMetaTypes() database.MetaTypes {
-	return database.MetaTypes{}
-}
-
-//go:embed example-config.yaml
-var ExampleConfig string
-
-func upgradeConfig(helper configupgrade.Helper) {
-	helper.Copy(configupgrade.Int, "automation", "portals", "count")
-	helper.Copy(configupgrade.Int, "automation", "portals", "members")
-	helper.Copy(configupgrade.Int, "automation", "portals", "messages")
-	helper.Copy(configupgrade.Str, "automation", "backfill", "timelimit")
-}
-
-func (dc *DummyConnector) GetConfig() (example string, data any, upgrader configupgrade.Upgrader) {
-	return ExampleConfig, &dc.Config, configupgrade.SimpleUpgrader(upgradeConfig)
-}
-
-func (dc *DummyConnector) LoadUserLogin(ctx context.Context, login *bridgev2.UserLogin) error {
-	login.Client = &DummyClient{
-		UserLogin: login,
-		Connector: dc,
-	}
-	return nil
-}
-
-func (dc *DummyConnector) GetLoginFlows() []bridgev2.LoginFlow {
-	return []bridgev2.LoginFlow{{
-		Name:        "Password",
-		Description: "Log in with a password",
-		ID:          "password",
-	}, {
-		Name:        "Cookies",
-		Description: "Log in with extracted cookies",
-		ID:          "cookies",
-	}, {
-		Name:        "Local storage",
-		Description: "Log in with extracted local storage",
-		ID:          "localstorage",
-	}, {
-		Name:        "Display and wait",
-		Description: "Log in through a remote server",
-		ID:          "displayandwait",
-	}}
-}
-
-func (dc *DummyConnector) CreateLogin(ctx context.Context, user *bridgev2.User, flowID string) (bridgev2.LoginProcess, error) {
-	return &DummyLogin{br: dc.br, Config: dc.Config, User: user, FlowID: flowID}, nil
+func (dc *DummyBridgeConnector) enabled() bool {
+	return dc.Config.DummyBridge.Enabled == nil || *dc.Config.DummyBridge.Enabled
 }

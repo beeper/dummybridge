@@ -3,7 +3,7 @@ package main
 import (
 	"maunium.net/go/mautrix/bridgev2/matrix/mxmain"
 
-	"github.com/beeper/dummybridge/pkg/connector"
+	dummybridge "github.com/beeper/dummybridge/pkg/connector"
 )
 
 // Information to find out exactly which commit the bridge was built from.
@@ -17,10 +17,10 @@ var (
 func main() {
 	m := mxmain.BridgeMain{
 		Name:        "dummybridge",
-		Description: "An echo bridge for testing",
+		Description: "DummyBridge demo bridge built with shared AI Chats primitives.",
 		URL:         "https://github.com/beeper/dummybridge",
-		Version:     "0.0.1",
-		Connector:   &connector.DummyConnector{},
+		Version:     "0.1.0",
+		Connector:   dummybridge.NewConnector(),
 	}
 	m.InitVersion(Tag, Commit, BuildTime)
 	m.Run()
