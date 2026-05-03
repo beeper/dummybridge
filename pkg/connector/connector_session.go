@@ -13,8 +13,8 @@ import (
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 
+	"github.com/beeper/ai-chats/pkg/shared/aihelpers"
 	"github.com/beeper/ai-chats/pkg/shared/bridgeutil"
-	"github.com/beeper/ai-chats/sdk"
 )
 
 const dummyPortalTopic = "DummyBridge demo room for turns, streaming, tools, approvals, and artifacts."
@@ -31,7 +31,7 @@ func (dc *DummyBridgeConnector) loggerForLogin(login *bridgev2.UserLogin) zerolo
 	return login.Log.With().Str("component", "dummybridge").Logger()
 }
 
-func (dc *DummyBridgeConnector) onConnect(ctx context.Context, info *sdk.LoginInfo) (*dummySession, error) {
+func (dc *DummyBridgeConnector) onConnect(ctx context.Context, info *aihelpers.LoginInfo) (*dummySession, error) {
 	if info == nil || info.Login == nil {
 		return nil, errors.New("missing login info")
 	}
@@ -55,7 +55,7 @@ func (dc *DummyBridgeConnector) onConnect(ctx context.Context, info *sdk.LoginIn
 
 func (dc *DummyBridgeConnector) onDisconnect(_ *dummySession) {}
 
-func (dc *DummyBridgeConnector) getChatInfo(conv *sdk.Conversation) (*bridgev2.ChatInfo, error) {
+func (dc *DummyBridgeConnector) getChatInfo(conv *aihelpers.Conversation) (*bridgev2.ChatInfo, error) {
 	if conv == nil || conv.Portal() == nil {
 		return &bridgev2.ChatInfo{
 			Name:  ptr.Ptr(dummyAgentName),
@@ -151,7 +151,7 @@ func (dc *DummyBridgeConnector) composeChatInfo(login *bridgev2.UserLogin, title
 	return bridgeutil.BuildDMChatInfo(bridgeutil.DMChatInfoParams{
 		Title:          title,
 		Topic:          dummyPortalTopic,
-		HumanUserID:    sdk.HumanUserID("dummybridge-user", login.ID),
+		HumanUserID:    aihelpers.HumanUserID("dummybridge-user", login.ID),
 		LoginID:        login.ID,
 		BotUserID:      dummyAgentUserID,
 		BotDisplayName: dummyAgentName,

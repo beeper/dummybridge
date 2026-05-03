@@ -3,7 +3,7 @@ package dummybridge
 import (
 	"maunium.net/go/mautrix/bridgev2"
 
-	"github.com/beeper/ai-chats/sdk"
+	"github.com/beeper/ai-chats/pkg/shared/aihelpers"
 )
 
 type UserLoginMetadata struct {
@@ -21,15 +21,15 @@ type PortalMetadata struct {
 type GhostMetadata struct{}
 
 type MessageMetadata struct {
-	sdk.BaseMessageMetadata
+	aihelpers.BaseMessageMetadata
 	Command  string `json:"command,omitempty"`
 	Scenario string `json:"scenario,omitempty"`
 }
 
 func loginMetadata(login *bridgev2.UserLogin) *UserLoginMetadata {
-	return sdk.EnsureLoginMetadata[UserLoginMetadata](login)
+	return aihelpers.EnsureLoginMetadata[UserLoginMetadata](login)
 }
 
 func portalMeta(portal *bridgev2.Portal) *PortalMetadata {
-	return sdk.EnsurePortalMetadata[PortalMetadata](portal)
+	return aihelpers.EnsurePortalMetadata[PortalMetadata](portal)
 }

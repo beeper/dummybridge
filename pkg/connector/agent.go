@@ -3,7 +3,7 @@ package dummybridge
 import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 
-	"github.com/beeper/ai-chats/sdk"
+	"github.com/beeper/ai-chats/pkg/shared/aihelpers"
 )
 
 const (
@@ -14,8 +14,8 @@ const (
 
 var dummyAgentUserID = networkid.UserID(dummyAgentIdentifierPrimary)
 
-func dummySDKAgent() *sdk.Agent {
-	return &sdk.Agent{
+func dummySDKAgent() *aihelpers.Agent {
+	return &aihelpers.Agent{
 		ID:          string(dummyAgentUserID),
 		Name:        dummyAgentName,
 		Description: "Synthetic demo agent for streaming, turns, tools, and approvals.",
@@ -23,6 +23,6 @@ func dummySDKAgent() *sdk.Agent {
 			dummyAgentIdentifierPrimary,
 			dummyAgentIdentifierShort,
 		},
-		Capabilities: sdk.BaseAgentCapabilities(),
+		Capabilities: aihelpers.BaseAgentCapabilities(),
 	}
 }

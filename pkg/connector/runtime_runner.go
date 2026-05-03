@@ -10,11 +10,11 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/beeper/ai-chats/pkg/shared/aihelpers"
 	"github.com/beeper/ai-chats/pkg/shared/citations"
-	"github.com/beeper/ai-chats/sdk"
 )
 
-func (r demoRunner) runLorem(ctx context.Context, turn *sdk.Turn, cmd loremCommand, _ zerolog.Logger) error {
+func (r demoRunner) runLorem(ctx context.Context, turn *aihelpers.Turn, cmd loremCommand, _ zerolog.Logger) error {
 	started := r.runtime.now()
 	opts := cmd.Options
 	rng := rngForOptions(opts.SeedSet, opts.Seed, started.UnixNano())
@@ -48,7 +48,7 @@ func (r demoRunner) runLorem(ctx context.Context, turn *sdk.Turn, cmd loremComma
 	return nil
 }
 
-func (r demoRunner) runTools(ctx context.Context, turn *sdk.Turn, cmd toolsCommand, _ zerolog.Logger) error {
+func (r demoRunner) runTools(ctx context.Context, turn *aihelpers.Turn, cmd toolsCommand, _ zerolog.Logger) error {
 	started := r.runtime.now()
 	opts := cmd.Options
 	rng := rngForOptions(opts.SeedSet, opts.Seed, started.UnixNano())
@@ -78,7 +78,7 @@ func (r demoRunner) runTools(ctx context.Context, turn *sdk.Turn, cmd toolsComma
 	return nil
 }
 
-func (r demoRunner) runRandom(ctx context.Context, turn *sdk.Turn, cmd randomCommand, log zerolog.Logger) error {
+func (r demoRunner) runRandom(ctx context.Context, turn *aihelpers.Turn, cmd randomCommand, log zerolog.Logger) error {
 	started := r.runtime.now()
 	seed := cmd.Seed
 	if !cmd.SeedSet {
@@ -182,7 +182,7 @@ func (r demoRunner) runRandom(ctx context.Context, turn *sdk.Turn, cmd randomCom
 	return nil
 }
 
-func (r demoRunner) runChaos(ctx context.Context, conv *sdk.Conversation, turn *sdk.Turn, cmd chaosCommand, log zerolog.Logger) error {
+func (r demoRunner) runChaos(ctx context.Context, conv *aihelpers.Conversation, turn *aihelpers.Turn, cmd chaosCommand, log zerolog.Logger) error {
 	started := r.runtime.now()
 	baseSeed := cmd.Seed
 	if !cmd.SeedSet {
@@ -198,7 +198,7 @@ func (r demoRunner) runChaos(ctx context.Context, conv *sdk.Conversation, turn *
 			childTurn = conv.StartTurn(ctx, dummySDKAgent(), nil)
 		}
 		childSeed := baseSeed + int64(childIndex+1)*97
-		go func(t *sdk.Turn) {
+		go func(t *aihelpers.Turn) {
 			defer wg.Done()
 			childLog := log.With().Int("child_index", childIndex+1).Str("child_turn_id", t.ID()).Logger()
 			staggerRNG := rand.New(rand.NewSource(childSeed + 17))
@@ -240,7 +240,7 @@ func (r demoRunner) runChaos(ctx context.Context, conv *sdk.Conversation, turn *
 	return nil
 }
 
-func (r demoRunner) runToolSpec(ctx context.Context, turn *sdk.Turn, spec toolSpec, rng *rand.Rand, opts commonCommandOptions, _ zerolog.Logger) error {
+func (r demoRunner) runToolSpec(ctx context.Context, turn *aihelpers.Turn, spec toolSpec, rng *rand.Rand, opts commonCommandOptions, _ zerolog.Logger) error {
 	toolCallID := fmt.Sprintf("dummy-tool-%d-%s", spec.SequenceIndex, sanitizeToolName(spec.Name))
 	input := map[string]any{
 		"tool":     spec.Name,
@@ -250,7 +250,7 @@ func (r demoRunner) runToolSpec(ctx context.Context, turn *sdk.Turn, spec toolSp
 	if spec.InputError {
 		turn.Writer().Tools().InputError(ctx, toolCallID, spec.Name, fmt.Sprintf("%v", input), "DummyBridge synthetic input error", spec.Provider)
 	} else if spec.Delta {
-		turn.Writer().Tools().EnsureInputStart(ctx, toolCallID, nil, sdk.ToolInputOptions{
+		turn.Writer().Tools().EnsureInputStart(ctx, toolCallID, nil, aihelpers.ToolInputOptions{
 			ToolName:         spec.Name,
 			ProviderExecuted: spec.Provider,
 			DisplayTitle:     spec.DisplayTitle,
@@ -259,7 +259,7 @@ func (r demoRunner) runToolSpec(ctx context.Context, turn *sdk.Turn, spec toolSp
 			return err
 		}
 	} else {
-		turn.Writer().Tools().EnsureInputStart(ctx, toolCallID, input, sdk.ToolInputOptions{
+		turn.Writer().Tools().EnsureInputStart(ctx, toolCallID, input, aihelpers.ToolInputOptions{
 			ToolName:         spec.Name,
 			ProviderExecuted: spec.Provider,
 			DisplayTitle:     spec.DisplayTitle,
@@ -269,16 +269,16 @@ func (r demoRunner) runToolSpec(ctx context.Context, turn *sdk.Turn, spec toolSp
 		turn.Writer().Tools().Output(ctx, toolCallID, map[string]any{
 			"status": "streaming",
 			"tool":   spec.Name,
-		}, sdk.ToolOutputOptions{ProviderExecuted: spec.Provider, Streaming: true})
+		}, aihelpers.ToolOutputOptions{ProviderExecuted: spec.Provider, Streaming: true})
 	}
 	if spec.Approval {
-		handle := turn.Approvals().Request(sdk.ApprovalRequest{
+		handle := turn.Approvals().Request(aihelpers.ApprovalRequest{
 			ToolCallID: toolCallID,
 			ToolName:   spec.Name,
 			TTL:        10 * time.Minute,
-			Presentation: &sdk.ApprovalPromptPresentation{
+			Presentation: &aihelpers.ApprovalPromptPresentation{
 				Title: spec.Name,
-				Details: []sdk.ApprovalDetail{{
+				Details: []aihelpers.ApprovalDetail{{
 					Label: "Mode",
 					Value: "DummyBridge demo approval",
 				}},
@@ -306,11 +306,11 @@ func (r demoRunner) runToolSpec(ctx context.Context, turn *sdk.Turn, spec toolSp
 		"status":   "ok",
 		"tool":     spec.Name,
 		"sequence": spec.SequenceIndex,
-	}, sdk.ToolOutputOptions{ProviderExecuted: spec.Provider})
+	}, aihelpers.ToolOutputOptions{ProviderExecuted: spec.Provider})
 	return nil
 }
 
-func (r demoRunner) streamToolInput(ctx context.Context, turn *sdk.Turn, toolCallID, toolName string, input map[string]any, providerExecuted bool, rng *rand.Rand, opts commonCommandOptions) error {
+func (r demoRunner) streamToolInput(ctx context.Context, turn *aihelpers.Turn, toolCallID, toolName string, input map[string]any, providerExecuted bool, rng *rand.Rand, opts commonCommandOptions) error {
 	text := fmt.Sprintf("{\"tool\":%q,\"sequence\":%d}", toolName, input["sequence"])
 	for _, chunk := range chunkText(text, rng, opts.ChunkMin, opts.ChunkMax) {
 		turn.Writer().Tools().InputDelta(ctx, toolCallID, toolName, chunk, providerExecuted)
@@ -321,7 +321,7 @@ func (r demoRunner) streamToolInput(ctx context.Context, turn *sdk.Turn, toolCal
 	return nil
 }
 
-func (r demoRunner) streamVisibleText(ctx context.Context, turn *sdk.Turn, text string, rng *rand.Rand, opts commonCommandOptions) error {
+func (r demoRunner) streamVisibleText(ctx context.Context, turn *aihelpers.Turn, text string, rng *rand.Rand, opts commonCommandOptions) error {
 	for _, chunk := range chunkText(text, rng, opts.ChunkMin, opts.ChunkMax) {
 		turn.Writer().TextDelta(ctx, chunk)
 		if err := r.runtime.sleep(ctx, r.sampleDelay(rng, opts.DelayMin, opts.DelayMax)); err != nil {
@@ -331,7 +331,7 @@ func (r demoRunner) streamVisibleText(ctx context.Context, turn *sdk.Turn, text 
 	return nil
 }
 
-func (r demoRunner) streamReasoning(ctx context.Context, turn *sdk.Turn, text string, rng *rand.Rand, opts commonCommandOptions) error {
+func (r demoRunner) streamReasoning(ctx context.Context, turn *aihelpers.Turn, text string, rng *rand.Rand, opts commonCommandOptions) error {
 	for _, chunk := range chunkText(text, rng, opts.ChunkMin, opts.ChunkMax) {
 		turn.Writer().ReasoningDelta(ctx, chunk)
 		if err := r.runtime.sleep(ctx, r.sampleDelay(rng, opts.DelayMin, opts.DelayMax)); err != nil {
@@ -341,7 +341,7 @@ func (r demoRunner) streamReasoning(ctx context.Context, turn *sdk.Turn, text st
 	return nil
 }
 
-func (r demoRunner) emitCommonDecorations(ctx context.Context, turn *sdk.Turn, opts commonCommandOptions, chars, step, steps int) {
+func (r demoRunner) emitCommonDecorations(ctx context.Context, turn *aihelpers.Turn, opts commonCommandOptions, chars, step, steps int) {
 	if opts.Meta {
 		seed := opts.Seed
 		if !opts.SeedSet {
@@ -380,7 +380,7 @@ func (r demoRunner) emitCommonDecorations(ctx context.Context, turn *sdk.Turn, o
 	}
 }
 
-func (r demoRunner) finishTurn(turn *sdk.Turn, opts commonCommandOptions) {
+func (r demoRunner) finishTurn(turn *aihelpers.Turn, opts commonCommandOptions) {
 	switch {
 	case opts.Abort:
 		turn.Abort("DummyBridge synthetic abort")

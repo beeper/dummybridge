@@ -9,7 +9,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 
-	"github.com/beeper/ai-chats/sdk"
+	"github.com/beeper/ai-chats/pkg/shared/aihelpers"
 )
 
 const dummyBridgeLoginStepInput = "com.beeper.ai_chats.dummybridge.enter_value"
@@ -20,7 +20,7 @@ var (
 )
 
 type DummyBridgeLogin struct {
-	sdk.BaseLoginProcess
+	aihelpers.BaseLoginProcess
 	User      *bridgev2.User
 	Connector *DummyBridgeConnector
 }
@@ -30,7 +30,7 @@ func (dl *DummyBridgeLogin) validate() error {
 	if dl.Connector != nil {
 		br = dl.Connector.br
 	}
-	return sdk.ValidateLoginState(dl.User, br)
+	return aihelpers.ValidateLoginState(dl.User, br)
 }
 
 func (dl *DummyBridgeLogin) Start(_ context.Context) (*bridgev2.LoginStep, error) {
@@ -64,12 +64,12 @@ func (dl *DummyBridgeLogin) SubmitUserInput(ctx context.Context, input map[strin
 		}
 		remoteName = fmt.Sprintf("%s (%s)", dummyAgentName, trimmed)
 	}
-	_, step, err := sdk.PersistAndCompleteLoginWithOptions(
+	_, step, err := aihelpers.PersistAndCompleteLoginWithOptions(
 		ctx,
 		dl.BackgroundProcessContext(),
 		dl.User,
 		&database.UserLogin{
-			ID:         sdk.NextUserLoginID(dl.User, ProviderDummyBridge),
+			ID:         aihelpers.NextUserLoginID(dl.User, ProviderDummyBridge),
 			RemoteName: remoteName,
 			Metadata: &UserLoginMetadata{
 				Provider:       ProviderDummyBridge,
@@ -77,12 +77,12 @@ func (dl *DummyBridgeLogin) SubmitUserInput(ctx context.Context, input map[strin
 			},
 		},
 		"com.beeper.ai_chats.dummybridge.complete",
-		sdk.PersistLoginCompletionOptions{
+		aihelpers.PersistLoginCompletionOptions{
 			Load: dl.Connector.LoadUserLogin,
 		},
 	)
 	if err != nil {
-		return nil, sdk.WrapLoginRespError(fmt.Errorf("failed to create dummybridge login: %w", err), http.StatusInternalServerError, "DUMMYBRIDGE", "CREATE_LOGIN_FAILED")
+		return nil, aihelpers.WrapLoginRespError(fmt.Errorf("failed to create dummybridge login: %w", err), http.StatusInternalServerError, "DUMMYBRIDGE", "CREATE_LOGIN_FAILED")
 	}
 	return step, nil
 }

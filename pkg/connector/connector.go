@@ -12,7 +12,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/id"
 
-	"github.com/beeper/ai-chats/sdk"
+	"github.com/beeper/ai-chats/pkg/shared/aihelpers"
 )
 
 var (
@@ -21,10 +21,10 @@ var (
 )
 
 type DummyBridgeConnector struct {
-	*sdk.ConnectorBase
+	*aihelpers.ConnectorBase
 	br        *bridgev2.Bridge
 	Config    Config
-	sdkConfig *sdk.Config[*dummySession, *Config]
+	sdkConfig *aihelpers.Config[*dummySession, *Config]
 
 	clientsMu sync.Mutex
 	clients   map[networkid.UserLoginID]bridgev2.NetworkAPI
@@ -34,11 +34,11 @@ type DummyBridgeConnector struct {
 
 func NewConnector() *DummyBridgeConnector {
 	dc := &DummyBridgeConnector{}
-	dc.sdkConfig = &sdk.Config[*dummySession, *Config]{
+	dc.sdkConfig = &aihelpers.Config[*dummySession, *Config]{
 		Name:             "dummybridge",
 		Description:      "DummyBridge demo bridge built with the AgentRemote SDK.",
 		ProtocolID:       "ai-dummybridge",
-		ProviderIdentity: sdk.ProviderIdentity{IDPrefix: "dummybridge", LogKey: "dummybridge_msg_id", StatusNetwork: "dummybridge"},
+		ProviderIdentity: aihelpers.ProviderIdentity{IDPrefix: "dummybridge", LogKey: "dummybridge_msg_id", StatusNetwork: "dummybridge"},
 		ClientCacheMu:    &dc.clientsMu,
 		ClientCache:      &dc.clients,
 		InitConnector: func(bridge *bridgev2.Bridge) {
@@ -104,7 +104,7 @@ func NewConnector() *DummyBridgeConnector {
 				return nil, bridgev2.ErrInvalidLoginFlowID
 			}
 			if !dc.enabled() {
-				return nil, sdk.NewLoginRespError(http.StatusForbidden, "This login flow is disabled.", "LOGIN", "DISABLED")
+				return nil, aihelpers.NewLoginRespError(http.StatusForbidden, "This login flow is disabled.", "LOGIN", "DISABLED")
 			}
 			return &DummyBridgeLogin{User: user, Connector: dc}, nil
 		},
@@ -115,7 +115,7 @@ func NewConnector() *DummyBridgeConnector {
 	dc.sdkConfig.OnMessage = dc.onMessage
 	dc.sdkConfig.GetChatInfo = dc.getChatInfo
 	dc.sdkConfig.GetUserInfo = dc.getUserInfo
-	dc.ConnectorBase = sdk.NewConnectorBase(dc.sdkConfig)
+	dc.ConnectorBase = aihelpers.NewConnectorBase(dc.sdkConfig)
 	return dc
 }
 

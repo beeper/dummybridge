@@ -6,26 +6,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beeper/ai-chats/sdk"
+	"github.com/beeper/ai-chats/pkg/shared/aihelpers"
 )
 
-func (dc *DummyBridgeConnector) onMessage(session *dummySession, conv *sdk.Conversation, msg *sdk.Message, turn *sdk.Turn) error {
+func (dc *DummyBridgeConnector) onMessage(session *dummySession, conv *aihelpers.Conversation, msg *aihelpers.Message, turn *aihelpers.Turn) error {
 	if conv == nil || turn == nil || msg == nil {
 		return nil
 	}
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
-		return sdk.SendSystemMessage(turn.Context(), conv.Login(), conv.Portal(), conv.Sender(), helpText())
+		return aihelpers.SendSystemMessage(turn.Context(), conv.Login(), conv.Portal(), conv.Sender(), helpText())
 	}
 	cmd, err := parseCommand(text)
 	if err != nil {
-		return sdk.SendSystemMessage(turn.Context(), conv.Login(), conv.Portal(), conv.Sender(), fmt.Sprintf("%s\n\n%s", err.Error(), helpText()))
+		return aihelpers.SendSystemMessage(turn.Context(), conv.Login(), conv.Portal(), conv.Sender(), fmt.Sprintf("%s\n\n%s", err.Error(), helpText()))
 	}
 	if cmd == nil {
-		return sdk.SendSystemMessage(turn.Context(), conv.Login(), conv.Portal(), conv.Sender(), helpText())
+		return aihelpers.SendSystemMessage(turn.Context(), conv.Login(), conv.Portal(), conv.Sender(), helpText())
 	}
 	if cmd.Name == "help" {
-		return sdk.SendSystemMessage(turn.Context(), conv.Login(), conv.Portal(), conv.Sender(), helpText())
+		return aihelpers.SendSystemMessage(turn.Context(), conv.Login(), conv.Portal(), conv.Sender(), helpText())
 	}
 	if session == nil {
 		return errors.New("dummybridge session is unavailable")
@@ -44,7 +44,7 @@ func (dc *DummyBridgeConnector) onMessage(session *dummySession, conv *sdk.Conve
 	case cmd.Chaos != nil:
 		runErr = runner.runChaos(turn.Context(), conv, turn, *cmd.Chaos, log)
 	default:
-		runErr = sdk.SendSystemMessage(turn.Context(), conv.Login(), conv.Portal(), conv.Sender(), helpText())
+		runErr = aihelpers.SendSystemMessage(turn.Context(), conv.Login(), conv.Portal(), conv.Sender(), helpText())
 	}
 	if runErr != nil {
 		log.Warn().Err(runErr).Dur("elapsed", runner.runtime.now().Sub(started)).Msg("DummyBridge demo command failed")
