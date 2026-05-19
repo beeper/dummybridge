@@ -338,9 +338,13 @@ func (dc *DummyClient) cleanupApprovalReactions(ctx context.Context, portal *bri
 		})
 	}
 	if msg != nil && msg.Event != nil && msg.Event.ID != "" {
+		senderID := string(msg.Event.Sender)
+		if msg.PreHandleResp != nil && msg.PreHandleResp.SenderID != "" {
+			senderID = string(msg.PreHandleResp.SenderID)
+		}
 		events = append(events, aistream.ReactionEvent{
 			EventID: string(msg.Event.ID),
-			Sender:  string(msg.Event.Sender),
+			Sender:  senderID,
 			Key:     reactionKey,
 		})
 	}
