@@ -302,8 +302,11 @@ func sanitizeRawEvent(evt agui.Event, budget int) agui.Event {
 		return cp
 	}
 	raw, err := json.Marshal(cp["rawEvent"])
-	if err != nil || len(raw) > 2048 {
-		cp["rawEvent"] = string(raw[:min(len(raw), 2048)])
+	if err != nil {
+		delete(cp, "rawEvent")
+		cp["rawEventTruncated"] = true
+	} else if len(raw) > 2048 {
+		cp["rawEvent"] = string(raw[:2048])
 		cp["rawEventTruncated"] = true
 	}
 	if JSONSize(cp) > budget {
