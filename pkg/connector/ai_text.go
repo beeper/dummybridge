@@ -181,7 +181,10 @@ func trimVisibleText(text string, limit int) string {
 		if len(kept) > 0 {
 			next += 2
 		}
-		if next > limit && len(kept) > 0 {
+		if next > limit {
+			if len(kept) == 0 {
+				kept = append(kept, trimText(block, limit))
+			}
 			break
 		}
 		kept = append(kept, block)
