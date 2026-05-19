@@ -286,24 +286,26 @@ func (b EventBuilder) ToolCallResult(messageID, toolCallID, content, state, role
 }
 
 func (b EventBuilder) StepStarted(messageID, stepName string) Event {
+	if stepName == "" {
+		panic("ag-ui: stepName is required for STEP_STARTED")
+	}
 	evt := b.base(EventStepStarted)
 	if messageID != "" {
 		evt["messageId"] = messageID
 	}
-	if stepName != "" {
-		evt["stepName"] = stepName
-	}
+	evt["stepName"] = stepName
 	return evt
 }
 
 func (b EventBuilder) StepFinished(messageID, stepName string) Event {
+	if stepName == "" {
+		panic("ag-ui: stepName is required for STEP_FINISHED")
+	}
 	evt := b.base(EventStepFinished)
 	if messageID != "" {
 		evt["messageId"] = messageID
 	}
-	if stepName != "" {
-		evt["stepName"] = stepName
-	}
+	evt["stepName"] = stepName
 	return evt
 }
 
