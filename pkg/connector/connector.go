@@ -44,7 +44,15 @@ func (dc *DummyConnector) Start(ctx context.Context) error {
 }
 
 func (dc *DummyConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities {
-	return &bridgev2.NetworkGeneralCapabilities{}
+	return &bridgev2.NetworkGeneralCapabilities{
+		Provisioning: bridgev2.ProvisioningCapabilities{
+			ResolveIdentifier: bridgev2.ResolveIdentifierCapabilities{
+				CreateDM:       true,
+				LookupUsername: true,
+				ContactList:    true,
+			},
+		},
+	}
 }
 
 func (dc *DummyConnector) GetBridgeInfoVersion() (info, caps int) {
@@ -62,7 +70,10 @@ func (dc *DummyConnector) GetName() bridgev2.BridgeName {
 }
 
 func (dc *DummyConnector) GetDBMetaTypes() database.MetaTypes {
-	return database.MetaTypes{}
+	return database.MetaTypes{
+		Message:  func() any { return &map[string]any{} },
+		Reaction: func() any { return &map[string]any{} },
+	}
 }
 
 //go:embed example-config.yaml
