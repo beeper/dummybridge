@@ -47,6 +47,8 @@ const (
 	ToolResultStateStreaming   = "streaming"
 	ToolResultStateComplete    = "complete"
 	ToolResultStateError       = "error"
+	PartStateStreaming         = "streaming"
+	PartStateDone              = "done"
 	ApprovalCustomRequested    = "approval-requested"
 	ApprovalCustomResponded    = "approval-responded"
 	FinishReasonStop           = "stop"

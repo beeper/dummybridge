@@ -257,7 +257,7 @@ func (dc *DummyClient) PreHandleMatrixReaction(_ context.Context, msg *bridgev2.
 	if dc != nil && dc.UserLogin != nil {
 		senderID = networkid.UserID(dc.UserLogin.ID)
 	}
-	key := normalizeApprovalReaction(msg.Content.RelatesTo.Key)
+	key := aistream.NormalizeReaction(msg.Content.RelatesTo.Key)
 	return bridgev2.MatrixReactionPreResponse{
 		SenderID:     senderID,
 		EmojiID:      networkid.EmojiID(key),
@@ -274,7 +274,7 @@ func (dc *DummyClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 	if !strings.HasPrefix(approvalID, "approval-") {
 		return &database.Reaction{}, nil
 	}
-	reaction := normalizeApprovalReaction(msg.Content.RelatesTo.Key)
+	reaction := aistream.NormalizeReaction(msg.Content.RelatesTo.Key)
 	selected, ok := aistream.ResolveReaction(aistream.DefaultApprovalOptions(approvalID), reaction)
 	if !ok {
 		return &database.Reaction{}, nil
@@ -376,10 +376,6 @@ func (dc *DummyClient) HandleMatrixReactionRemove(ctx context.Context, msg *brid
 	return nil
 }
 
-func normalizeApprovalReaction(reaction string) string {
-	return strings.TrimSpace(strings.ReplaceAll(reaction, "\ufe0f", ""))
-}
-
 func getTransactionID(msg *bridgev2.MatrixMessage) networkid.TransactionID {
 	if msg.Event != nil && msg.Event.Unsigned.TransactionID != "" {
 		return networkid.TransactionID(msg.Event.Unsigned.TransactionID)
@@ -469,7 +465,11 @@ func (dc *DummyClient) queueAIResponse(ctx context.Context, portal *bridgev2.Por
 
 	now := time.Now()
 	runID := "run-" + string(randomMessageID())
-	plans, err := buildAIRunPlans(ctx, runID, string(portal.ID), inboundBody(inbound), now)
+	var body string
+	if inbound != nil {
+		body = inbound.Body
+	}
+	plans, err := buildAIRunPlans(ctx, runID, string(portal.ID), body, now)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to build AI runs")
 		return
@@ -547,20 +547,20 @@ func (dc *DummyClient) waitForMessageMXID(
 	if dc.UserLogin.ID != "" && dc.UserLogin.ID != portal.Receiver {
 		receivers = append(receivers, dc.UserLogin.ID)
 	}
-	ticker := time.NewTicker(50 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-ticker.C:
+		}
 		for _, receiver := range receivers {
 			mxid := dc.lookupMessageMXID(ctx, receiver, messageID)
 			if mxid != "" {
 				return mxid
 			}
-		}
-		select {
-		case <-ctx.Done():
-			return ""
-		case <-ticker.C:
 		}
 	}
 	return ""
@@ -730,13 +730,6 @@ func validApprovalContext(ctx aistream.ApprovalContext) (aistream.ApprovalContex
 
 func (dc *DummyClient) queueAIRunFinalMetadata(portal *bridgev2.Portal, messageID networkid.MessageID, run aistream.Run) {
 	dc.UserLogin.QueueRemoteEvent(aibridgev2.FinalMetadataEdit(portal.PortalKey, aiGhostID, messageID, run, time.Now()))
-}
-
-func inboundBody(content *event.MessageEventContent) string {
-	if content == nil {
-		return ""
-	}
-	return content.Body
 }
 
 func (dc *DummyClient) HandleMatrixDeleteChat(ctx context.Context, msg *bridgev2.MatrixDeleteChat) error {

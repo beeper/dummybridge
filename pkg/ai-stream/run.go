@@ -365,6 +365,7 @@ func (t Run) FinalUIMessageSnapshot(textBudget int) agui.UIMessage {
 	}
 	var textPart agui.MessagePart
 	var thinkingPart agui.MessagePart
+	var textContent, thinkingContent strings.Builder
 	toolParts := map[string]agui.MessagePart{}
 	toolResultParts := map[string]agui.MessagePart{}
 	approvalByID := map[string]any{}
@@ -380,12 +381,12 @@ func (t Run) FinalUIMessageSnapshot(textBudget int) agui.UIMessage {
 				continue
 			}
 			if textPart == nil {
-				textPart = appendPart(agui.MessagePart{"type": "text", "content": "", "state": "streaming"})
+				textPart = appendPart(agui.MessagePart{"type": "text", "content": "", "state": agui.PartStateStreaming})
 			}
-			textPart["content"] = asString(textPart["content"]) + delta
+			textContent.WriteString(delta)
 		case agui.EventTextMessageEnd:
 			if textPart != nil {
-				textPart["state"] = "done"
+				textPart["state"] = agui.PartStateDone
 			}
 		case agui.EventReasoningMsgCont:
 			delta, _ := evt["delta"].(string)
@@ -393,12 +394,12 @@ func (t Run) FinalUIMessageSnapshot(textBudget int) agui.UIMessage {
 				continue
 			}
 			if thinkingPart == nil {
-				thinkingPart = appendPart(agui.MessagePart{"type": "thinking", "content": "", "state": "streaming"})
+				thinkingPart = appendPart(agui.MessagePart{"type": "thinking", "content": "", "state": agui.PartStateStreaming})
 			}
-			thinkingPart["content"] = asString(thinkingPart["content"]) + delta
+			thinkingContent.WriteString(delta)
 		case agui.EventReasoningMsgEnd:
 			if thinkingPart != nil {
-				thinkingPart["state"] = "done"
+				thinkingPart["state"] = agui.PartStateDone
 			}
 		case agui.EventToolCallStart:
 			toolCallID, _ := evt["toolCallId"].(string)
@@ -495,6 +496,12 @@ func (t Run) FinalUIMessageSnapshot(textBudget int) agui.UIMessage {
 			}
 		}
 	}
+	if textPart != nil {
+		textPart["content"] = textContent.String()
+	}
+	if thinkingPart != nil {
+		thinkingPart["content"] = thinkingContent.String()
+	}
 	compactTextPart(textPart, textBudget)
 	compactTextPart(thinkingPart, textBudget)
 	return message
@@ -519,7 +526,7 @@ func compactTextPart(part agui.MessagePart, budget int) {
 		part["providerMetadata"] = map[string]any{"truncated": true}
 	}
 	if part["state"] == "" {
-		part["state"] = "done"
+		part["state"] = agui.PartStateDone
 	}
 }
 

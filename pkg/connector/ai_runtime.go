@@ -143,25 +143,6 @@ type aiRunPlan struct {
 	Delay time.Duration
 }
 
-func defaultAIRuntime() aiRuntime {
-	return aiRuntime{
-		now: time.Now,
-		sleep: func(ctx context.Context, delay time.Duration) error {
-			if delay <= 0 {
-				return nil
-			}
-			timer := time.NewTimer(delay)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		},
-	}
-}
-
 func virtualAIRuntime(now time.Time) aiRuntime {
 	current := now
 	return aiRuntime{
@@ -288,12 +269,7 @@ func parseCommand(input string) (*parsedCommand, error) {
 		return &parsedCommand{Name: "help"}, nil
 	}
 	switch strings.ToLower(tokens[0]) {
-	case "help", "/help", "!help":
-		return &parsedCommand{Name: "help"}, nil
-	case "dummybridge":
-		if len(tokens) > 1 && strings.EqualFold(tokens[1], "help") {
-			return &parsedCommand{Name: "help"}, nil
-		}
+	case "help", "/help", "!help", "dummybridge":
 		return &parsedCommand{Name: "help"}, nil
 	case "stream-lorem":
 		cmd, err := parseLoremCommand(tokens[1:])
@@ -743,6 +719,7 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 	}
 	stepOpen := false
 	stepName := ""
+	actionOptions, actionWeightTotal := buildRandomActionOptions(cmd)
 	for action := range cmd.Actions {
 		if !deadline.IsZero() && !r.runtime.now().Before(deadline) {
 			break
@@ -759,7 +736,7 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 				break
 			}
 		}
-		switch chooseRandomAction(cmd, rng) {
+		switch pickWeighted(actionOptions, actionWeightTotal, rng) {
 		case randomActionText:
 			for _, chunk := range chunkText(buildDemoVisibleText(40+rng.Intn(160), rand.New(rand.NewSource(rng.Int63()))), rng, defaultChunkMin, defaultChunkMax) {
 				w.Text(chunk)
@@ -944,7 +921,7 @@ func statePatch(values map[string]any) []map[string]any {
 	return patch
 }
 
-func chooseRandomAction(cmd randomCommand, rng *rand.Rand) string {
+func buildRandomActionOptions(cmd randomCommand) ([]randomActionOption, int) {
 	options := []randomActionOption{
 		{randomActionText, 6},
 		{randomActionThinking, 4},
@@ -986,6 +963,13 @@ func chooseRandomAction(cmd randomCommand, rng *rand.Rand) string {
 	total := 0
 	for _, option := range options {
 		total += option.weight
+	}
+	return options, total
+}
+
+func pickWeighted(options []randomActionOption, total int, rng *rand.Rand) string {
+	if total <= 0 || len(options) == 0 {
+		return randomActionText
 	}
 	pick := rng.Intn(total)
 	for _, option := range options {

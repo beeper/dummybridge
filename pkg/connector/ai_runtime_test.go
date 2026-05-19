@@ -439,7 +439,8 @@ func TestRandomProfilesCoverToolsArtifactsAndTransientData(t *testing.T) {
 	seen := map[string]bool{}
 	rng := rand.New(rand.NewSource(4))
 	for range 400 {
-		seen[chooseRandomAction(cmd, rng)] = true
+		options, total := buildRandomActionOptions(cmd)
+		seen[pickWeighted(options, total, rng)] = true
 	}
 	for _, action := range []string{randomActionTool, randomActionToolFail, randomActionToolDeny, randomActionToolApproval} {
 		if !seen[action] {
@@ -451,7 +452,8 @@ func TestRandomProfilesCoverToolsArtifactsAndTransientData(t *testing.T) {
 	seen = map[string]bool{}
 	rng = rand.New(rand.NewSource(8))
 	for range 400 {
-		seen[chooseRandomAction(cmd, rng)] = true
+		options, total := buildRandomActionOptions(cmd)
+		seen[pickWeighted(options, total, rng)] = true
 	}
 	for _, action := range []string{randomActionSource, randomActionDocument, randomActionFile, randomActionMetadata, randomActionData, randomActionDataTransient} {
 		if !seen[action] {

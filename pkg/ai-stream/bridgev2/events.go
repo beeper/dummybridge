@@ -14,78 +14,58 @@ import (
 	"maunium.net/go/mautrix/id"
 )
 
+func eventMeta(eventType bridgev2.RemoteEventType, portalKey networkid.PortalKey, sender networkid.UserID, timestamp time.Time) simplevent.EventMeta {
+	return simplevent.EventMeta{
+		Type:        eventType,
+		PortalKey:   portalKey,
+		Sender:      bridgev2.EventSender{Sender: sender},
+		Timestamp:   timestamp,
+		StreamOrder: timestamp.UnixNano(),
+	}
+}
+
+func messagePart(content *event.MessageEventContent, extra map[string]any, dbMetadata map[string]any) *bridgev2.ConvertedMessagePart {
+	return &bridgev2.ConvertedMessagePart{
+		ID:         networkid.PartID("0"),
+		Type:       event.EventMessage,
+		Content:    content,
+		Extra:      extra,
+		DBMetadata: dbMetadata,
+	}
+}
+
 func Anchor(portalKey networkid.PortalKey, sender networkid.UserID, run aistream.Run, timestamp time.Time) *simplevent.PreConvertedMessage {
 	content, extra := aimatrix.AnchorContent(run)
 	return &simplevent.PreConvertedMessage{
-		EventMeta: simplevent.EventMeta{
-			Type:        bridgev2.RemoteEventMessage,
-			PortalKey:   portalKey,
-			Sender:      bridgev2.EventSender{Sender: sender},
-			Timestamp:   timestamp,
-			StreamOrder: timestamp.UnixNano(),
-		},
-		Data: &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{{
-			ID:      networkid.PartID("0"),
-			Type:    event.EventMessage,
-			Content: content,
-			Extra:   extra,
-		}}},
-		ID: networkid.MessageID(run.MessageID),
+		EventMeta: eventMeta(bridgev2.RemoteEventMessage, portalKey, sender, timestamp),
+		Data:      &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{messagePart(content, extra, nil)}},
+		ID:        networkid.MessageID(run.MessageID),
 	}
 }
 
 func Carrier(portalKey networkid.PortalKey, sender networkid.UserID, run aistream.Run, carrier aistream.Carrier, targetEventID id.EventID, index int, timestamp time.Time) *simplevent.PreConvertedMessage {
 	content, extra := aimatrix.CarrierContent(carrier, targetEventID)
 	return &simplevent.PreConvertedMessage{
-		EventMeta: simplevent.EventMeta{
-			Type:        bridgev2.RemoteEventMessage,
-			PortalKey:   portalKey,
-			Sender:      bridgev2.EventSender{Sender: sender},
-			Timestamp:   timestamp,
-			StreamOrder: timestamp.UnixNano(),
-		},
-		Data: &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{{
-			ID:      networkid.PartID("0"),
-			Type:    event.EventMessage,
-			Content: content,
-			Extra:   extra,
-		}}},
-		ID: networkid.MessageID(aistream.StreamTxnID(run.RunID, index)),
+		EventMeta: eventMeta(bridgev2.RemoteEventMessage, portalKey, sender, timestamp),
+		Data:      &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{messagePart(content, extra, nil)}},
+		ID:        networkid.MessageID(aistream.StreamTxnID(run.RunID, index)),
 	}
 }
 
 func ApprovalPrompt(portalKey networkid.PortalKey, sender networkid.UserID, ctx aistream.ApprovalContext, timestamp time.Time) *simplevent.PreConvertedMessage {
 	content, extra := aimatrix.ApprovalContent(ctx, aistream.DefaultApprovalOptions(ctx.ID))
 	return &simplevent.PreConvertedMessage{
-		EventMeta: simplevent.EventMeta{
-			Type:        bridgev2.RemoteEventMessage,
-			PortalKey:   portalKey,
-			Sender:      bridgev2.EventSender{Sender: sender},
-			Timestamp:   timestamp,
-			StreamOrder: timestamp.UnixNano(),
-		},
-		Data: &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{{
-			ID:      networkid.PartID("0"),
-			Type:    event.EventMessage,
-			Content: content,
-			Extra:   extra,
-			DBMetadata: map[string]any{
-				"com.beeper.ai.approval": ctx,
-			},
-		}}},
+		EventMeta: eventMeta(bridgev2.RemoteEventMessage, portalKey, sender, timestamp),
+		Data: &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{
+			messagePart(content, extra, map[string]any{"com.beeper.ai.approval": ctx}),
+		}},
 		ID: networkid.MessageID(ctx.ID),
 	}
 }
 
 func ApprovalOptionReaction[T any](portalKey networkid.PortalKey, sender networkid.UserID, ctx aistream.ApprovalContext, option aistream.ReactionOption[T], timestamp time.Time) *simplevent.Reaction {
 	return &simplevent.Reaction{
-		EventMeta: simplevent.EventMeta{
-			Type:        bridgev2.RemoteEventReaction,
-			PortalKey:   portalKey,
-			Sender:      bridgev2.EventSender{Sender: sender},
-			Timestamp:   timestamp,
-			StreamOrder: timestamp.UnixNano(),
-		},
+		EventMeta:     eventMeta(bridgev2.RemoteEventReaction, portalKey, sender, timestamp),
 		TargetMessage: networkid.MessageID(ctx.ID),
 		EmojiID:       networkid.EmojiID(option.ID),
 		Emoji:         option.Values[0],
@@ -103,13 +83,7 @@ func ApprovalOptionReaction[T any](portalKey networkid.PortalKey, sender network
 func FinalMetadataEdit(portalKey networkid.PortalKey, sender networkid.UserID, messageID networkid.MessageID, run aistream.Run, timestamp time.Time) *simplevent.Message[*aistream.Run] {
 	finalContent, finalExtra := aimatrix.AnchorContent(run)
 	return &simplevent.Message[*aistream.Run]{
-		EventMeta: simplevent.EventMeta{
-			Type:        bridgev2.RemoteEventEdit,
-			PortalKey:   portalKey,
-			Sender:      bridgev2.EventSender{Sender: sender},
-			Timestamp:   timestamp,
-			StreamOrder: timestamp.UnixNano(),
-		},
+		EventMeta:     eventMeta(bridgev2.RemoteEventEdit, portalKey, sender, timestamp),
 		Data:          &run,
 		ID:            messageID,
 		TargetMessage: messageID,

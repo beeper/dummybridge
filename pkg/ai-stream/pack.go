@@ -67,6 +67,8 @@ func PackRunFromSeq(run Run, targetEventID string, budget int, startSeq int) ([]
 	}
 	var carriers []Carrier
 	var current Carrier
+	currentSize := 0
+	emptyCarrierOverhead := JSONSize(CarrierContent([]Envelope{}))
 	seq := startSeq
 	for _, original := range run.Events {
 		for _, part := range splitEventForBudget(original, budget) {
@@ -74,14 +76,25 @@ func PackRunFromSeq(run Run, targetEventID string, budget int, startSeq int) ([]
 			if err != nil {
 				return nil, err
 			}
-			single := CarrierContent([]Envelope{env})
-			if JSONSize(single) > budget {
+			envSize := JSONSize(env)
+			if emptyCarrierOverhead+envSize > budget {
 				return nil, fmt.Errorf("stream envelope %d exceeds %d byte budget", seq, budget)
 			}
-			candidate := append(append([]Envelope{}, current.Envelopes...), env)
-			if len(current.Envelopes) > 0 && JSONSize(CarrierContent(candidate)) > budget {
+			// +1 for the comma separator between envelopes in the JSON array.
+			addedSize := envSize
+			if len(current.Envelopes) > 0 {
+				addedSize++
+			}
+			if len(current.Envelopes) > 0 && currentSize+addedSize > budget {
 				carriers = append(carriers, current)
 				current = Carrier{}
+				currentSize = 0
+				addedSize = envSize
+			}
+			if len(current.Envelopes) == 0 {
+				currentSize = emptyCarrierOverhead + envSize
+			} else {
+				currentSize += addedSize
 			}
 			current.Envelopes = append(current.Envelopes, env)
 			seq++
@@ -91,22 +104,6 @@ func PackRunFromSeq(run Run, targetEventID string, budget int, startSeq int) ([]
 		carriers = append(carriers, current)
 	}
 	return carriers, nil
-}
-
-func eventTimestampMillis(evt agui.Event) int64 {
-	switch value := evt["timestamp"].(type) {
-	case int64:
-		return value
-	case int:
-		return int64(value)
-	case float64:
-		return int64(value)
-	case json.Number:
-		n, _ := value.Int64()
-		return n
-	default:
-		return 0
-	}
 }
 
 func NextSeq(carriers []Carrier) int {
