@@ -281,7 +281,7 @@ func (dc *DummyClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 	}
 
 	selectedKey, firstResolution := dc.resolveApprovalOnce(approvalID, reaction)
-	dc.cleanupApprovalReactions(ctx, msg.Portal, networkid.MessageID(approvalID), selectedKey, msg)
+	dc.cleanupApprovalReactions(ctx, msg.Portal, networkid.MessageID(approvalID), selectedKey, reaction, msg)
 	if !firstResolution {
 		log.Info().
 			Str("approval_id", approvalID).
@@ -315,7 +315,7 @@ func (dc *DummyClient) resolveApprovalOnce(approvalID, selectedKey string) (stri
 	return selectedKey, true
 }
 
-func (dc *DummyClient) cleanupApprovalReactions(ctx context.Context, portal *bridgev2.Portal, approvalMessageID networkid.MessageID, selectedKey string, msg *bridgev2.MatrixReaction) {
+func (dc *DummyClient) cleanupApprovalReactions(ctx context.Context, portal *bridgev2.Portal, approvalMessageID networkid.MessageID, selectedKey, reactionKey string, msg *bridgev2.MatrixReaction) {
 	if dc == nil || dc.UserLogin == nil || dc.UserLogin.Bridge == nil || dc.UserLogin.Bridge.DB == nil || portal == nil {
 		return
 	}
@@ -343,7 +343,7 @@ func (dc *DummyClient) cleanupApprovalReactions(ctx context.Context, portal *bri
 		events = append(events, aistream.ReactionEvent{
 			EventID: string(msg.Event.ID),
 			Sender:  string(msg.Event.Sender),
-			Key:     selectedKey,
+			Key:     reactionKey,
 		})
 	}
 	cleanup := aistream.CleanupReactions(aistream.DefaultApprovalOptions(string(approvalMessageID)), selectedKey, events, string(aiGhostID))
