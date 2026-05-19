@@ -226,8 +226,7 @@ var FileCommand = &commands.FullHandler{
 	Func: func(e *commands.Event) {
 		e.Reply("Generating file event in this room")
 
-		var mediaData []byte
-		mediaData = []byte("Test text file")
+		mediaData := []byte("Test text file")
 		mediaName := "test.txt"
 		mediaMime := "text/plain"
 

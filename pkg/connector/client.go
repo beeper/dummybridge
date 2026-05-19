@@ -48,8 +48,8 @@ var _ bridgev2.ReactionHandlingNetworkAPI = (*DummyClient)(nil)
 
 const (
 	aiGhostID        networkid.UserID = "ai"
-	aiGhostName                       = "AI"
-	aiPortalIDPrefix                  = "ai-"
+	aiGhostName      string           = "AI"
+	aiPortalIDPrefix string           = "ai-"
 )
 
 var delayedRemoteEchoPattern = regexp.MustCompile(`(?i)^remote-echo\s+delay\s+([0-9]+(?:ms|s|m|h))$`)
