@@ -720,6 +720,17 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 	stepOpen := false
 	stepName := ""
 	actionOptions, actionWeightTotal := buildRandomActionOptions(cmd)
+	handleTool := func(spec toolSpec) error {
+		if err := r.runToolSpec(ctx, w, spec, rng, defaultCommonOptions()); err != nil {
+			if errors.Is(err, errApprovalRequested) && stepOpen {
+				w.StepFinish(stepName)
+				stepOpen = false
+				stepName = ""
+			}
+			return err
+		}
+		return nil
+	}
 	for action := range cmd.Actions {
 		if !deadline.IsZero() && !r.runtime.now().Before(deadline) {
 			break
@@ -754,13 +765,21 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 				stepOpen = true
 			}
 		case randomActionTool:
-			_ = r.runToolSpec(ctx, w, toolSpec{Name: randomToolName(rng), SequenceIndex: action + 1}, rng, defaultCommonOptions())
+			if err := handleTool(toolSpec{Name: randomToolName(rng), SequenceIndex: action + 1}); err != nil {
+				return err
+			}
 		case randomActionToolFail:
-			_ = r.runToolSpec(ctx, w, toolSpec{Name: randomToolName(rng), Fail: true, SequenceIndex: action + 1}, rng, defaultCommonOptions())
+			if err := handleTool(toolSpec{Name: randomToolName(rng), Fail: true, SequenceIndex: action + 1}); err != nil {
+				return err
+			}
 		case randomActionToolDeny:
-			_ = r.runToolSpec(ctx, w, toolSpec{Name: randomToolName(rng), Deny: true, SequenceIndex: action + 1}, rng, defaultCommonOptions())
+			if err := handleTool(toolSpec{Name: randomToolName(rng), Deny: true, SequenceIndex: action + 1}); err != nil {
+				return err
+			}
 		case randomActionToolApproval:
-			_ = r.runToolSpec(ctx, w, toolSpec{Name: randomToolName(rng), Approval: true, SequenceIndex: action + 1}, rng, defaultCommonOptions())
+			if err := handleTool(toolSpec{Name: randomToolName(rng), Approval: true, SequenceIndex: action + 1}); err != nil {
+				return err
+			}
 		case randomActionSource:
 			w.Custom("com.beeper.source", map[string]any{"url": fmt.Sprintf("https://dummybridge.local/random/source/%d", action+1), "title": fmt.Sprintf("Random Source %d", action+1)})
 		case randomActionDocument:
