@@ -1139,8 +1139,10 @@ func chunkText(text string, rng *rand.Rand, minChunk, maxChunk int) []string {
 		if size > len(text) {
 			size = len(text)
 		}
-		chunks = append(chunks, text[:size])
-		text = text[size:]
+		parts := aistream.SplitTextUTF8(text, size)
+		chunk := parts[0]
+		chunks = append(chunks, chunk)
+		text = text[len(chunk):]
 	}
 	return chunks
 }
