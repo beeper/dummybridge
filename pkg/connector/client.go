@@ -571,18 +571,11 @@ func (dc *DummyClient) waitForMessageMXID(
 }
 
 func (dc *DummyClient) lookupMessageMXID(ctx context.Context, receiver networkid.UserLoginID, messageID networkid.MessageID) id.EventID {
-	var mxid id.EventID
-	err := dc.UserLogin.Bridge.DB.Message.GetDB().QueryRow(
-		ctx,
-		`SELECT mxid FROM message WHERE bridge_id=$1 AND (room_receiver=$2 OR room_receiver='') AND id=$3 ORDER BY part_id ASC LIMIT 1`,
-		dc.UserLogin.Bridge.DB.Message.BridgeID,
-		receiver,
-		messageID,
-	).Scan(&mxid)
-	if err != nil {
+	message, err := dc.UserLogin.Bridge.DB.Message.GetFirstPartByID(ctx, receiver, messageID)
+	if err != nil || message == nil {
 		return ""
 	}
-	return mxid
+	return message.MXID
 }
 
 func (dc *DummyClient) queueAIApprovalPrompt(portal *bridgev2.Portal, run aistream.Run, prompt aistream.ApprovalPrompt, targetEventID id.EventID, timestamp time.Time) {
