@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/rand"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -427,6 +428,28 @@ func TestBuildAIRunRandomHonorsVirtualDelays(t *testing.T) {
 	if first == 0 || last-first < 300 {
 		t.Fatalf("expected random run timestamps to reflect action delays, first=%d last=%d", first, last)
 	}
+}
+
+func TestRandomModeApprovalPause(t *testing.T) {
+	for seed := int64(1); seed <= 200; seed++ {
+		run, err := buildAIRun(context.Background(), "run-approval", "thread-approval", "stream-random 1 --profile=tools --allow-approval --seed="+strconv.FormatInt(seed, 10), time.Unix(10, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.ApprovalID == "" {
+			continue
+		}
+		for _, evt := range run.Events {
+			if evt["type"] == agui.EventRunFinished {
+				t.Fatalf("approval run emitted RUN_FINISHED with seed %d", seed)
+			}
+		}
+		if run.Status.State != "streaming" {
+			t.Fatalf("expected approval run to remain streaming, got %q", run.Status.State)
+		}
+		return
+	}
+	t.Fatal("no approval action selected for tested random seeds")
 }
 
 func TestRandomProfilesCoverToolsArtifactsAndTransientData(t *testing.T) {
