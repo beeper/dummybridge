@@ -511,7 +511,9 @@ func (dc *DummyClient) queueAIRunStreamAndMetadata(portal *bridgev2.Portal, mess
 		prompt.SeqStart = nextSeq + i*10
 		dc.queueAIApprovalPrompt(portal, run, prompt, targetEventID, time.Now())
 	}
-	dc.queueAIRunFinalMetadata(portal, messageID, run)
+	if run.Status.State != "streaming" {
+		dc.queueAIRunFinalMetadata(portal, messageID, run)
+	}
 }
 
 func (dc *DummyClient) queueAICarriers(portal *bridgev2.Portal, targetEventID id.EventID, run aistream.Run, startSeq int) ([]aistream.Carrier, error) {
@@ -582,17 +584,19 @@ func (dc *DummyClient) lookupMessageMXID(ctx context.Context, receiver networkid
 func (dc *DummyClient) queueAIApprovalPrompt(portal *bridgev2.Portal, run aistream.Run, prompt aistream.ApprovalPrompt, targetEventID id.EventID, timestamp time.Time) {
 	reactions := aistream.DefaultApprovalOptions(prompt.ID)
 	approvalCtx := aistream.ApprovalContext{
-		ID:          prompt.ID,
-		ThreadID:    run.ThreadID,
-		RunID:       run.RunID,
-		MessageID:   run.MessageID,
-		ToolCallID:  prompt.ToolCallID,
-		ToolName:    prompt.ToolName,
-		TargetEvent: string(targetEventID),
-		AgentID:     run.AgentID,
-		AgentName:   run.AgentName,
-		Model:       run.Model,
-		SeqStart:    prompt.SeqStart,
+		ID:               prompt.ID,
+		ThreadID:         run.ThreadID,
+		RunID:            run.RunID,
+		MessageID:        run.MessageID,
+		ToolCallID:       prompt.ToolCallID,
+		ToolName:         prompt.ToolName,
+		TargetEvent:      string(targetEventID),
+		AgentID:          run.AgentID,
+		AgentName:        run.AgentName,
+		Model:            run.Model,
+		SeqStart:         prompt.SeqStart,
+		PreviewText:      run.Preview.Text,
+		PreviewTruncated: run.Preview.Truncated,
 	}
 	dc.UserLogin.QueueRemoteEvent(aibridgev2.ApprovalPrompt(portal.PortalKey, aiGhostID, approvalCtx, timestamp))
 
@@ -620,7 +624,9 @@ func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *brid
 	}
 	if _, err := dc.queueAICarriers(portal, targetEventID, run, approvalCtx.SeqStart); err != nil {
 		log.Warn().Err(err).Str("approval_id", approvalCtx.ID).Msg("Failed to queue AI approval response")
+		return
 	}
+	dc.queueAIRunFinalMetadata(portal, networkid.MessageID(approvalCtx.MessageID), run)
 }
 
 func (dc *DummyClient) approvalContextForMessage(ctx context.Context, portal *bridgev2.Portal, message *database.Message) (aistream.ApprovalContext, bool) {

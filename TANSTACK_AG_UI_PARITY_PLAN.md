@@ -8,20 +8,102 @@ Build dummybridge AI around current TanStack AG-UI primitives in both directions
 - Desktop consumes multi-event encrypted AG-UI streams and hides carrier events from the normal timeline.
 - Shared Go packages define the primitive contract instead of preserving old AI SDK or agentremote decisions.
 
-Do not install dependencies or modify lockfiles unless the user explicitly approves that dependency change. `@tanstack/ai-react-ui` is approved for the Desktop rendering work in this plan.
+Do not install dependencies, update dependencies, or modify lockfiles unless the user explicitly approves that exact dependency change. Before adding `@tanstack/ai-react-ui` or changing the Desktop lockfile, verify whether it is already present in the current Desktop checkout; if it is not, ask first.
 
-## Current State
+## Plan Of Record
 
-The dummybridge repo currently has a provisional `pkg/aichats` package and AI handling in `pkg/connector/client.go`.
+This is the intended behavior to preserve while finishing the implementation:
 
-Known current behavior:
+1. The normal AG-UI stream is an ordered delta log. Envelopes have `seq`, never `seqTotal`, carrier totals, or final event counts.
+2. Every run has one visible Matrix anchor message. Normal stream carriers and finalization carriers are hidden transport events that merge into that anchor.
+3. The final supported-client state is complete AG-UI state: text, thinking, tool calls/results, approval state, sources/files/data/state, terminal status, usage, model, and run metadata.
+4. Finalization sends hidden carriers first, then the compact final Matrix edit last. The final edit stops streaming and carries Matrix-native preview HTML; it does not need to carry the full generated text or full parts array.
+5. Over-budget final state uses a base `MESSAGES_SNAPSHOT` plus `CUSTOM name="com.beeper.ai.final-parts"` continuations. Continuations contain only relation data and omitted parts, not repeated full metadata.
+6. PAS/Desktop must process hidden stream/finalization carriers before treating the final edit as the point where streaming stops. From the renderer's perspective, there is always one final AI message.
+7. Approval prompts remain separate visible Matrix messages for actionability, while semantic approval state is also represented in AG-UI so supported clients can show it inline as a tool-call state.
+8. Unsupported clients are not the primary target, but the final Matrix edit must still be a coherent bounded Matrix HTML preview for timeline, search, and notifications.
+
+Do not reintroduce these rejected approaches:
+
+- No `seqTotal`, carrier totals, or final event totals on normal streaming envelopes.
+- No visible carrier bubbles as a fallback for unsupported or failed merge behavior.
+- No final full-text Matrix edit for long runs. The final edit is a bounded preview plus compact metadata.
+- No broad `as any` or whole-object assertions at the Desktop TanStack render boundary.
+- No duplicate Beeper-only UI message model where TanStack types already describe the part contract.
+- No package-manager install/update/lockfile change without explicit approval.
+
+## Implementation Status
+
+As of this checkout, the plan should be read as a completion/audit checklist rather than a blank design doc.
+
+Done in dummybridge:
+
+- New `pkg/ag-ui`, `pkg/ai-stream`, `pkg/ai-stream/matrix`, and `pkg/ai-stream/bridgev2` packages exist.
+- The old provisional `pkg/aichats` package has been removed.
+- Normal stream envelopes use ordered `seq` and do not carry `seqTotal`.
+- `MESSAGES_SNAPSHOT` finalization can split into a metadata-preserving base snapshot plus `com.beeper.ai.final-parts` continuations.
+- Large text/thinking final parts split at UTF-8 boundaries and are reassembled by the supported client model.
+- Carrier replay for built runs is contiguous; synthetic timestamps no longer add random delays between already-built carrier sends.
+- Final anchor edits use mautrix Markdown rendering for Matrix HTML preview content.
+- Approval response carriers are queued before the final metadata edit for the anchor.
+
+Done in the related Desktop checkout:
+
+- Carrier-only encrypted events with non-empty `*.deltas` are routed as hidden stream updates instead of normal timeline upserts.
+- `com.beeper.ai.final-parts` continuations merge into the existing TanStack-shaped UI message by `messageId`, `runId`, and `partOffset`.
+- The AI renderer path uses a typed high-level adapter at the TanStack render boundary instead of asserting the whole message as `any`.
+- `src/renderer/ai/ui-message.ts` uses typed builders/guards for TanStack and Beeper custom parts instead of broad `MutableUIPart`/record-level assertions.
+
+Completion status:
+
+- The non-visual plan gates are implemented and verified by the evidence below.
+- Full Desktop typecheck is still red, but the failures are outside the touched AI/PAS files and are listed below.
+- Visual testing remains explicitly excluded from the current completion target.
+
+Completion gates:
+
+- Unit/focused tests pass for dummybridge and touched Desktop AI/PAS paths.
+- Full Desktop typecheck either passes or every failure is documented as unrelated to touched AI/PAS files.
+- Live staging smoke proves over-64KB output produces one visible AI anchor and hidden carriers only.
+- Live staging smoke proves approve and deny both finalize through hidden response carriers before the final anchor edit.
+- Replay/backfill, redaction/delete, and missing-gap behavior have either automated tests or an explicit live/manual verification note.
+- `rg` source scan proves runtime source does not emit `seqTotal`.
+
+Current verification snapshot, 2026-05-19:
+
+- `go test -mod=readonly ./...` in dummybridge passes.
+- Desktop focused AI/PAS tests pass:
+  - `bun run test --run src/common/ai-common.test.ts src/renderer/ai/ui-message.test.ts src/renderer/ai/stream-ordering.test.ts src/renderer/stores/AIChatsStore.test.ts src/pas-server/beeper/EventSyncContext.test.ts src/pas-server/beeper/connect/ws-event-mapper.test.ts src/pas-server/beeper/connect/ws-events-server.test.ts`
+- Full Desktop typecheck still fails in unrelated files outside the touched AI/PAS paths:
+  - `BrandLink.stories.tsx`
+  - `ComposeMessage/TextArea/TextArea.tsx`
+  - `DetachedAccountsOnboarding.tsx`
+  - `electron-ipc.ts`
+  - `measureInteractionNextPaint.ts`
+  - `QuickRepliesPrefsSubView.tsx`
+- Runtime source scans find no total-count fields:
+  - `rg -n 'seqTotal|carrierTotal|finalEventTotal' pkg cmd --glob '!**/*_test.go'`
+  - `rg -n 'seqTotal|carrierTotal|finalEventTotal' src/common src/renderer/ai src/renderer/stores src/pas-server/beeper --glob '!**/*.test.ts' --glob '!**/*.test.tsx'`
+- Desktop AI render/store source scan finds no broad assertions in the touched AI paths:
+  - `rg -n '\] as any|as MutableUIPart|MutableUIPart|ToolUIPartRecord|console\.log\(' src/renderer/ai src/renderer/stores/AIChatsStore.ts`
+- Live staging over-64KB smoke passed after lowering the raw carrier budget to 40KB: one visible AI anchor, hidden carriers, no visible `com.beeper.ai.final-parts` leakage, and Matrix HTML preview on the final edit.
+- Live staging approval approve and deny pass: prompt remains separate, selected user reaction remains, bridge option reactions are redacted, response carriers are queued, and final anchor edit preserves the existing preview instead of reverting to `...`.
+- Live staging random/chaos smoke passes for hidden-carrier behavior: no carrier bubbles appeared in Desktop API output, approval prompts stayed separate, and final edits did not regress completed approval anchors.
+- Replay/backfill has unit coverage through batched `updates` extraction and `AIChatsStore` replay into an existing anchor.
+- Deleted/redacted carrier and missing-gap behavior have unit coverage: carrier deletion marks the anchor failed while keeping carrier events hidden, and unresolved sequence gaps now fail via timer without requiring another stream event.
+
+## Baseline And Existing Entry Points
+
+The original plan replaced a provisional `pkg/aichats` package plus AI handling in `pkg/connector/client.go`. In this checkout, `pkg/aichats` should stay deleted; the active implementation is the new `pkg/ag-ui` and `pkg/ai-stream` stack plus the connector integration points.
+
+Behavior baseline to preserve or improve:
 
 - AI DM resolution uses the `ai`/`AI` ghost and AI portals with the `ai-` prefix.
-- The bridge sends one visible placeholder event, streams `com.beeper.llm.deltas`, then edits the placeholder with final content.
-- Current deltas are AG-UI-like but incomplete.
-- Current approval requests are separate Matrix events with `com.beeper.ai.approval` metadata and reaction options.
-- Current approval reaction handling should keep the user's selected emoji and remove the bridge-posted placeholder/non-selected options, but this needs robust implementation and tests.
-- Current text streaming has started moving away from full accumulated content on each delta, but the final design must enforce that.
+- The bridge sends one visible anchor/placeholder event, streams `com.beeper.llm.deltas`, then edits the anchor with final compact metadata and Matrix preview content.
+- Stream deltas must be real AG-UI events, not AG-UI-like compatibility shapes.
+- Approval requests are separate Matrix events with `com.beeper.ai.approval` metadata and reaction options.
+- Approval reaction handling keeps the user's selected emoji and removes bridge-posted placeholder/non-selected options.
+- Text streaming must send incremental deltas and must not resend full accumulated text on every delta.
 
 Desktop already has partial AI stream support in these areas:
 
@@ -67,7 +149,7 @@ Primary dummybridge checkout:
 - `/Users/batuhan/Projects/labs/dummybridge/config-agui.yaml`
 - `/Users/batuhan/Projects/labs/dummybridge/config-qa-agui.yaml`
 
-Current dummybridge AI implementation to replace:
+Legacy dummybridge AI implementation that should not be restored:
 
 - `/Users/batuhan/Projects/labs/dummybridge/pkg/aichats/agui.go`
 - `/Users/batuhan/Projects/labs/dummybridge/pkg/aichats/matrix.go`
@@ -77,7 +159,7 @@ Current dummybridge AI implementation to replace:
 - `/Users/batuhan/Projects/labs/dummybridge/pkg/connector/login.go`
 - `/Users/batuhan/Projects/labs/dummybridge/pkg/connector/example-config.yaml`
 
-New dummybridge package targets:
+Active dummybridge package targets:
 
 - `/Users/batuhan/Projects/labs/dummybridge/pkg/ag-ui`
 - `/Users/batuhan/Projects/labs/dummybridge/pkg/ai-stream`
@@ -334,6 +416,7 @@ Envelope shape:
 Ordering and merge key:
 
 - `seq` is strictly increasing per `{target_event, runId}`.
+- Do not put total counts such as `seqTotal`, carrier count, or final event count on normal stream envelopes. The streaming layer is an ordered event stream, not a pre-counted file transfer.
 - If `target_event` is unavailable during early processing, temporarily key by `{threadId, runId}` and promote to `{target_event, runId}` when the anchor message is known.
 - Desktop buffers out-of-order deltas within existing ordering limits.
 - Duplicate or stale `seq` values are ignored or rejected consistently.
@@ -341,17 +424,17 @@ Ordering and merge key:
 Size budget:
 
 - Treat 64KB as the external ceiling.
-- Use a hard carrier budget of 58KB for serialized Matrix content to leave buffer for encryption overhead, wrappers, event metadata, and implementation variance.
+- Use a hard carrier budget of 40KB for serialized Matrix content. Live staging E2EE sends showed that 58KB raw carrier content can become 66-79KB encrypted Matrix event content, so the budget must leave room for megolm/base64/wrapper overhead.
 - The packer must measure serialized JSON byte size before adding an envelope to a carrier.
-- If a single text delta would exceed the 58KB carrier budget, split it at UTF-8 rune boundaries.
-- If a non-text event cannot fit inside the 58KB budget, return a validation error rather than sending it.
+- If a single text delta would exceed the carrier budget, split it at UTF-8 rune boundaries.
+- If a non-text event cannot fit inside the carrier budget, return a validation error rather than sending it.
 - `rawEvent` must be optional, bounded, and safe to omit. If including `rawEvent` would push a carrier over budget, truncate it or drop it before packing rather than bloating the event.
 - Truncated raw provider data must be marked, e.g. `rawEventTruncated: true`, so debugging does not confuse partial raw data with complete provider payloads.
 
 Preview/body algorithm:
 
 - The first visible message is the canonical message for the run.
-- Put as much useful early visible preview as practical into the first message while preserving required metadata and staying under the 58KB budget.
+- Put as much useful early visible preview as practical into the first message while preserving required metadata and staying under the carrier budget.
 - All run-level metadata that should survive as the message identity, such as model, usage, thread/run/message IDs, terminal state, and approval summary, belongs on the first visible message or its compact final metadata.
 - Later carrier messages should be hidden and merged by compatible clients into the first visible message.
 - Later carrier bodies should be empty or minimal and put payload in `.deltas`.
@@ -361,9 +444,61 @@ Preview/body algorithm:
 Finalization:
 
 - The run accumulator is only for finalization, preview generation, and tests.
-- Finalization emits compact terminal metadata and a compact final UI state when needed.
-- Do not require a final Matrix edit containing the full generated body for over-64KB runs.
-- The client is responsible for merging the stream.
+- Normal stream chunks remain unaware of final chunk totals. Completion is determined by ordered AG-UI terminal/finalization events plus the final edit ordering, not by `seqTotal`.
+- Finalization must emit the complete final AG-UI UI state for supported clients, including text, thinking, tool calls, tool results, approval state, sources/files/data/state, terminal status, usage, and model/run metadata.
+- Finalization state may be split across hidden carrier events to stay under the serialized Matrix carrier budget.
+- The final Matrix edit is sent only after all normal stream carriers and finalization carriers have been queued. It marks the anchor finalized and carries compact metadata plus Matrix-native preview HTML, not the full parts array.
+- Do not require a final Matrix edit containing the full generated body or full AG-UI parts for over-64KB runs.
+- The client is responsible for merging the hidden stream/finalization carriers into the anchor message.
+
+Final snapshot splitting algorithm:
+
+- Build one final AG-UI `UIMessage` in render order.
+- Compact adjacent same-kind text fragments before packing final state when doing so does not lose detail. For example, five adjacent text-only chunks should become one final text part.
+- Preserve semantic boundaries. Do not merge text across thinking, tool-call, tool-result, approval, source/file/data, or state parts.
+- Start with a base `MESSAGES_SNAPSHOT` event containing the message identity and metadata:
+  - `id`
+  - `role`
+  - `metadata`
+  - `parts`
+- The base event should include as many user-visible parts as fit under budget, in display order. Prioritize visible content over bulky diagnostics.
+- If the next part would exceed budget, omit it from the base event and move it to a continuation event instead of duplicating metadata.
+- Continuation events use a Beeper-owned AG-UI custom event: `CUSTOM` with `name: "com.beeper.ai.final-parts"`.
+- Continuation event payload contains only relation/merge data and parts:
+
+```json
+{
+  "messageId": "message-id",
+  "runId": "run-id",
+  "threadId": "thread-id",
+  "partOffset": 3,
+  "parts": []
+}
+```
+
+- `partOffset` is the zero-based part index in the final message and is used for deterministic append/validation. Continuations must not repeat full message metadata.
+- Desktop merges by applying the base snapshot, then inserting/appending continuation `parts` at `partOffset`. If the continuation part has the same semantic part identity as the part at that offset and only extends a split `content` field, concatenate the content instead of creating a second visible part.
+- Split at the highest semantic level possible: carrier -> AG-UI event -> UIMessage parts -> large string fields.
+- If a single text or thinking part is too large, split only its `content` at UTF-8 rune boundaries and use the same `partOffset` for the continuation slices so they concatenate back into one part.
+- Do not split tool call, tool result, source/file/data, approval, or structured state objects unless there is an explicit field-level reassembly schema. Drop or truncate raw/debug/provider metadata before considering structured splitting.
+- If one non-splittable structured part cannot fit under budget after raw/debug/provider metadata is removed, fail packing with a validation error instead of emitting an unmergeable partial object.
+- Finalization carriers are sent before the final Matrix edit. The final edit must not race ahead of the final-parts carriers.
+
+Final Matrix preview:
+
+- Finalized messages must have Matrix-native preview content on the anchor edit:
+  - `body`: bounded plain text preview
+  - `format`: `org.matrix.custom.html`
+  - `formatted_body`: Matrix HTML generated by mautrix's Markdown renderer
+- Unsupported clients are not a primary target, but the final edit should still be a coherent Matrix message preview for timeline/search/notifications.
+- The full supported-client AI state comes from hidden carriers, not from the final edit body.
+
+Transport ordering:
+
+- For built dummybridge runs, send carrier events contiguously once the anchor Matrix event ID is known. Do not sleep between carriers based on synthetic generation timestamps.
+- Demo/random delays may affect when runs are started or what timestamps are embedded in AG-UI events, but they must not delay replaying an already-built carrier sequence before finalization.
+- Queue order for one run must be: anchor -> hidden normal carriers -> visible approval prompts/reaction options when applicable -> hidden approval response carriers when resolved -> hidden finalization carriers -> final anchor edit.
+- If finalization carriers and final edit arrive in the same sync batch, PAS/Desktop must process carrier stream entries before using the edit to stop streaming.
 
 Replay/backfill:
 
@@ -391,7 +526,7 @@ AG-UI state events:
 - `MESSAGES_SNAPSHOT` carries a complete AG-UI `UIMessage[]` snapshot.
 - Desktop must preserve and expose this state for AI rendering/devtools instead of dropping it.
 - State events are allowed to affect rendered state when the renderer intentionally consumes them.
-- State events must still obey the 58KB carrier budget and multi-carrier splitting rules.
+- State events must still obey the carrier budget and multi-carrier splitting rules.
 - Do not duplicate the normal streaming path: text should still prefer text events, tool calls should still prefer tool events, and state events should be used when AG-UI state synchronization is the right primitive.
 
 Run errors:
@@ -471,7 +606,8 @@ Update Desktop as part of parity because the new transport deliberately splits o
 
 Dependency:
 
-- Add `@tanstack/ai-react-ui` to the Desktop app and use it for AI message rendering.
+- Use `@tanstack/ai-react-ui` from the current Desktop checkout when it is already present.
+- If it is absent, ask before adding it, running a package-manager install/update, or changing any manifest/lockfile.
 - Do not hand-roll a parallel markdown renderer when TanStack's UI package already provides one.
 - `@tanstack/ai-react-ui` `TextPart` renders Markdown with `react-markdown`, GFM tables/strikethrough via `remark-gfm`, sanitized HTML via `rehype-sanitize`, and code highlighting via `rehype-highlight`.
 - Keep Beeper-specific shell/layout/actions in Desktop, but delegate TanStack text/thinking/tool/result part rendering to TanStack UI components or thin render props around them.
@@ -532,6 +668,9 @@ UI message application:
 - In `src/renderer/ai/ui-message.ts`, apply AG-UI events into TanStack-shaped parts.
 - Preserve ordered parts instead of collapsing everything by type.
 - Render the resulting TanStack `UIMessage` with `@tanstack/ai-react-ui` instead of converting it into a separate Beeper-only part model.
+- Type the state at the highest correct level. The renderer should accept a TanStack-shaped `UIMessage`/renderable message type and should not require whole-message `as any` assertions.
+- Use narrow builders/guards for Beeper custom part variants instead of broad `MutableUIPart` assertions. If a part is not expressible as a TanStack part, keep the extension isolated behind a typed Beeper custom-part union and convert at the render boundary.
+- Do not use assertions to bypass missing required fields. If TanStack requires a field, either populate it from AG-UI state or keep the part out of the TanStack render path until it has a real representation.
 - Support compatibility input for current events while preferring new output shapes:
   - text
   - thinking/step
@@ -587,9 +726,11 @@ Rules:
 
 - AG-UI stream emits a tool-call state transition to `approval-requested`.
 - The tool-call part includes `approval: { id, needsApproval: true }`.
-- Matrix reaction choices are transport metadata and must not be embedded into AG-UI events.
+- Matrix reaction choices are transport metadata and must not be embedded into AG-UI events as the source of truth for reactions.
 - Approval prompt events should relate to the first visible anchor message and include `threadId`, `runId`, `messageId`, `toolCallId`, and approval ID.
 - Matrix approval event stores `com.beeper.ai.approval` with tool call ID, tool name, `threadId`, `runId`, `messageId`, expiration if any, and reaction options.
+- Approval prompts are separate visible Matrix messages for actionability and reaction handling.
+- Supported clients may render the same approval inline as a tool-call variant on the anchor message. To support that, duplicate semantic approval state into the AG-UI stream while keeping Matrix prompt/reaction metadata on the prompt event.
 - On user reaction, the bridge resolves the option to a `ToolApprovalResponse`.
 - After resolution, emit AG-UI state `approval-responded`.
 - If approved, continue execution and emit tool result `complete` or `error`.
@@ -607,40 +748,28 @@ Custom events:
 - Beeper-specific custom events must use a clear namespace such as `com.beeper.*`.
 - Do not add random one-off custom names when an AG-UI lifecycle, tool, state, or message event already models the behavior.
 
-## Open Decisions With Recommended Defaults
+## Decisions And Remaining Behavior
 
-These are the remaining decisions that affect product behavior or implementation shape. Use the recommended default unless the answer to the question changes the product intent.
+Settled decisions:
 
-1. Source of truth for AG-UI schemas
-   - Recommended: `pkg/ag-ui` is the only Go source of truth for AG-UI concepts. Other packages import it instead of redefining parallel event, message, tool, or approval types.
-   - Decision: Desktop must use TanStack types directly for AG-UI/UI message concepts. Local Desktop types should only describe Beeper transport envelopes and app-specific metadata.
+- `pkg/ag-ui` is the Go source of truth for AG-UI concepts. Other Go packages import it instead of redefining parallel event, message, tool, or approval types.
+- Desktop uses TanStack types directly for AG-UI/UI message concepts wherever possible. Desktop-local types describe Beeper transport and persistence, not a second AI message model.
+- Long runs never require a final full-text Matrix edit. The final edit stores compact identity/terminal metadata and Matrix HTML preview; supported clients reconstruct complete UI state from hidden carriers.
+- Final AG-UI state is complete and may be split into hidden finalization carriers. The final anchor edit remains compact and must not embed the full parts/chunks array.
+- The final split format is base `MESSAGES_SNAPSHOT` plus `com.beeper.ai.final-parts` continuations with relation data and omitted parts only.
+- Normal stream chunks do not include `seqTotal` or any total-count field.
+- First visible message metadata owns non-part run metadata: IDs, model, usage, finish/terminal state, approval summary, and source/file/data descriptors that are metadata. It does not store streamed text chunks, thinking chunks, tool args, tool results, or full parts.
+- Use mautrix in `pkg/ai-stream/matrix`. Keep bridgev2-specific queue/database/redaction behavior outside the pure AG-UI package.
 
-2. Final persisted state for long runs
-   - Recommended: never require a final full-text edit. The first visible message stores compact identity/terminal metadata and Desktop reconstructs long content from carriers.
-   - Decision: compact final metadata should include everything needed to render the run except streamed parts/chunks. Do not store full parts/chunks in final metadata for large runs.
+Behavior still requiring implementation or verification:
 
-3. Metadata contract on the first visible message
-   - Decision: first message owns all non-part run metadata: IDs, model, usage, finish/terminal state, approval summary, source/file/data descriptors that are metadata, and any archived `aichats` metadata that is not the streamed UI parts/chunks themselves. Do not include dollar cost fields unless there is a separate product decision.
-
-4. Dropped or invalid carriers
-   - Recommended: Desktop marks the first visible AI message failed and keeps carriers hidden. Do not expose carrier messages as fallback bubbles.
-   - Direct question: Should Desktop show a recoverable "stream incomplete" state, or a hard failed generation state?
-
-5. Approval idempotency
-   - Recommended: first valid approval resolution wins. Later Matrix reactions or programmatic responses are ignored, do not re-run the tool, and may be cleaned up as stale choices.
-   - Direct question: Should a user be allowed to change approval before the tool starts executing, or is first valid reaction always final?
-
-6. Allow-always behavior
-   - Recommended: support it generically in approval fields and reaction options, but dummybridge should only persist/use it if there is a clear storage target.
-   - Direct question: Should dummybridge actually remember allow-always across runs, or only emit the field to prove the UI/transport supports it?
-
-7. Package boundaries
-   - Recommended: embrace mautrix in `pkg/ai-stream/matrix`; keep bridgev2-specific database/queue/redaction in `pkg/ai-stream/bridgev2`; keep `pkg/ag-ui` pure.
-   - Direct question: Should `pkg/ai-stream/matrix` return mautrix `event.MessageEventContent` directly everywhere, or expose a small content struct plus conversion helpers?
-
-8. TanStack docs freshness
-   - Recommended: before implementation starts, re-open current TanStack AI docs and update the contract section if state names or part shapes changed.
-   - Direct question: Should implementation pin to the docs current at implementation start, or should tests tolerate small TanStack naming changes?
+- Dropped or invalid carriers: Desktop should mark the anchor incomplete/failed and keep carriers hidden. Do not show carrier messages as fallback bubbles.
+- Missing `seq` gaps: timeout must stop infinite buffering, fail or mark incomplete on the anchor, and keep later stray carrier events hidden.
+- Carrier delete/redaction: recompute from remaining carriers when possible; otherwise mark incomplete/failed.
+- Replay/backfill: reconstruct the same visible AI run from persisted anchor plus carriers as live streaming.
+- Approval idempotency: first valid approval resolution should win. Later reactions/programmatic responses should not re-run the tool and may be cleaned up as stale.
+- Allow-always: support the field generically in approval options/responses, but dummybridge should not persist cross-run allow-always state until there is a real product storage target.
+- TanStack drift: before future dependency upgrades, re-open current TanStack docs/source and update this contract deliberately. Do not silently adapt by assertions.
 
 ## Tests
 
@@ -683,11 +812,16 @@ Dummybridge Go tests:
 `pkg/ai-stream` tests:
 
 - Verify ordered run writer output.
+- Verify normal stream envelopes do not contain finalization totals such as `seqTotal`.
 - Verify no per-delta accumulated full text.
 - Verify final accumulator is only used at finalization.
 - Verify UTF-8 splitting.
-- Verify carrier packer respects the 58KB serialized JSON budget.
+- Verify carrier packer respects the serialized JSON carrier budget.
 - Verify stream reconstruction from carriers.
+- Verify finalization carriers split a complete final UI message into a base snapshot plus continuation parts without repeating metadata.
+- Verify finalization continuations merge deterministically by `messageId`, `runId`, and `partOffset`.
+- Verify oversized text/thinking final parts split at UTF-8 boundaries and reassemble exactly.
+- Verify oversized raw/debug/provider metadata is truncated or omitted before splitting structured tool/data parts.
 - Verify duplicate/stale/out-of-order `seq` behavior.
 - Verify missing `seq` gap timeout marks the anchor incomplete/failed.
 - Verify carrier delete/redaction recomputes or marks the anchor incomplete/failed.
@@ -696,11 +830,13 @@ Dummybridge Go tests:
 Over-64KB tests:
 
 - Generate at least 70KiB of output.
-- Assert every carrier's serialized content is at or below 58KB.
+- Assert every carrier's serialized content is at or below the carrier budget.
 - Assert at least two carrier events are emitted.
 - Assert later carriers have no preview body or only minimal body.
 - Assert reconstruction from deltas exactly equals generated output.
 - Assert no final full-body edit is required to display the complete stream.
+- Assert final snapshot state is complete even when split across finalization carriers.
+- Assert final edit contains Matrix `formatted_body` generated by mautrix Markdown rendering and does not contain the full parts array.
 
 Desktop tests:
 
@@ -708,6 +844,9 @@ Desktop tests:
 - Carrier-only events are hidden and do not render as chat bubbles.
 - Single-update and batched `updates` formats still work.
 - Multi-carrier stream merges into the visible anchor message.
+- Finalization base snapshot plus `com.beeper.ai.final-parts` continuations merge into one final `UIMessage`.
+- Final edit arriving after carriers finalizes the existing anchor without creating a second message or flickering back to preview-only content.
+- If final edit and stream/finalization carriers arrive in one sync batch, carriers are applied before streaming is stopped.
 - Out-of-order `seq` buffering works.
 - Duplicate/stale `seq` handling works.
 - TanStack-shaped text/thinking/tool/result parts render through the AI message view.
@@ -727,8 +866,21 @@ Desktop tests:
 Commands to run:
 
 - In dummybridge: `go test -mod=readonly ./...`
-- In Desktop after adding `@tanstack/ai-react-ui`: run the package manager install/update command explicitly approved for that dependency and commit the resulting manifest/lockfile changes with the Desktop implementation.
+- In Desktop, if `@tanstack/ai-react-ui` is not already present: ask before running any package-manager install/update command or changing any lockfile.
 - In Desktop: run the existing focused test commands for touched files. At minimum cover `ai-common`, `ui-message`, `AIChatsStore`, `EventSyncContext`, and stream mapper tests.
+- In Desktop: run typecheck after the focused tests. If the full repo typecheck is already failing for unrelated reasons, record the unrelated failures and separately prove touched AI files are type-clean.
+
+Verification status to track in the PR or completion note:
+
+- Dummybridge unit tests: command, date, result.
+- Desktop focused tests: command, date, result.
+- Desktop typecheck: command, date, result, and whether failures touch AI files.
+- Source scan: prove no runtime source emits `seqTotal`.
+- Over-64KB live smoke: one visible AI anchor, hidden carriers, final Matrix HTML preview, complete reconstructed supported-client state.
+- Approval live smoke: visible approval prompt, selected reaction preserved, stale bridge option reactions removed, final anchor edit after response carriers.
+- Random/chaos live smoke: no carrier bubbles, no stuck streaming state, no flicker to preview-only content after final edit.
+- Replay/backfill smoke: persisted history reconstructs the same visible run after restart/reload.
+- Redaction/gap smoke or unit coverage: carriers stay hidden and anchor becomes recomputed or incomplete/failed.
 
 ## Live Smoke Testing
 
@@ -754,5 +906,6 @@ Acceptance criteria:
 - Carrier events do not show as separate bubbles.
 - Streaming remains incremental.
 - Over-64KB output reconstructs correctly.
+- Finalized over-64KB runs still have one visible anchor message, complete supported-client AG-UI state, and bounded Matrix HTML preview on the final edit.
 - Approvals work from Matrix reactions and programmatic/TanStack-shaped responses.
 - The selected approval emoji is kept and non-selected placeholder options are removed.

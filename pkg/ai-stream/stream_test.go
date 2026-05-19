@@ -27,14 +27,120 @@ func TestPackRunSplitsOver64KBAndReconstructs(t *testing.T) {
 		if size := JSONSize(CarrierContent(carrier.Envelopes)); size > CarrierBudgetBytes {
 			t.Fatalf("carrier %d is %d bytes, budget %d", i, size, CarrierBudgetBytes)
 		}
-		for _, env := range carrier.Envelopes {
-			if env.SeqTotal <= 0 {
-				t.Fatalf("carrier envelope missing total count: %#v", env)
-			}
-		}
 	}
 	if got := ReconstructText(carriers); got != strings.Repeat("a", 70*1024) {
 		t.Fatalf("reconstructed text length = %d", len(got))
+	}
+}
+
+func TestPackRunDoesNotPutFinalizationTotalsOnStreamEnvelopes(t *testing.T) {
+	run := NewRun("run-1", "thread-1", DefaultModel, "ai", "AI", time.Unix(10, 0))
+	writer := NewWriter(run, func() time.Time { return time.Unix(10, 0) })
+	writer.Start()
+	writer.Text("hello")
+	writer.Finish(agui.FinishReasonStop)
+
+	carriers, err := PackRun(*run, "$anchor", CarrierBudgetBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(CarrierContent(carriers[0].Envelopes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "seqTotal") {
+		t.Fatalf("stream envelopes must not contain finalization totals: %s", raw)
+	}
+}
+
+func TestFinalSnapshotSplitsIntoBaseAndContinuationParts(t *testing.T) {
+	run := NewRun("run-1", "thread-1", DefaultModel, "ai", "AI", time.Unix(10, 0))
+	writer := NewWriter(run, func() time.Time { return time.Unix(10, 0) })
+	writer.Start()
+	writer.Thinking(strings.Repeat("t", 12*1024))
+	writer.Text(strings.Repeat("a", 70*1024))
+	writer.ToolStart("tool-1", "shell", 0, nil)
+	writer.ToolArgs("tool-1", `{"cmd":"pwd"}`, `{"cmd":"pwd"}`)
+	writer.ToolEnd("tool-1", "shell", `{"cmd":"pwd"}`, map[string]any{"ok": true})
+	writer.Finish(agui.FinishReasonStop)
+
+	carriers, err := PackRun(*run, "$anchor", CarrierBudgetBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var baseSnapshots, continuations int
+	var reconstructedText strings.Builder
+	var sawMetadata bool
+	for i, carrier := range carriers {
+		if size := JSONSize(CarrierContent(carrier.Envelopes)); size > CarrierBudgetBytes {
+			t.Fatalf("carrier %d is %d bytes, budget %d", i, size, CarrierBudgetBytes)
+		}
+		for _, env := range carrier.Envelopes {
+			switch env.Part["type"] {
+			case agui.EventMessagesSnapshot:
+				baseSnapshots++
+				messages, ok := env.Part["messages"].([]any)
+				if !ok || len(messages) != 1 {
+					t.Fatalf("bad final base snapshot: %#v", env.Part["messages"])
+				}
+				message, ok := messages[0].(map[string]any)
+				if !ok {
+					t.Fatalf("bad final base snapshot message: %#v", messages[0])
+				}
+				metadata, ok := message["metadata"].(map[string]any)
+				if ok && metadata["runId"] == "run-1" {
+					sawMetadata = true
+				}
+			case agui.EventCustom:
+				if env.Part["name"] != FinalPartsCustomName {
+					continue
+				}
+				continuations++
+				value := env.Part["value"].(map[string]any)
+				if value["messageId"] != run.MessageID || value["runId"] != run.RunID {
+					t.Fatalf("bad continuation relation data: %#v", value)
+				}
+				if _, ok := value["metadata"]; ok {
+					t.Fatalf("continuation must not duplicate message metadata: %#v", value)
+				}
+				for _, part := range testFinalParts(t, value["parts"]) {
+					if part["type"] == "text" {
+						reconstructedText.WriteString(part["content"].(string))
+					}
+				}
+			}
+		}
+	}
+	if baseSnapshots != 1 || continuations == 0 || !sawMetadata {
+		t.Fatalf("expected one metadata base snapshot and continuations, base=%d continuations=%d metadata=%v", baseSnapshots, continuations, sawMetadata)
+	}
+	if !strings.Contains(run.Text(), reconstructedText.String()) {
+		t.Fatalf("unexpected continuation text reconstruction length=%d", reconstructedText.Len())
+	}
+}
+
+func testFinalParts(t *testing.T, value any) []map[string]any {
+	t.Helper()
+	switch parts := value.(type) {
+	case []agui.MessagePart:
+		out := make([]map[string]any, 0, len(parts))
+		for _, part := range parts {
+			out = append(out, map[string]any(part))
+		}
+		return out
+	case []any:
+		out := make([]map[string]any, 0, len(parts))
+		for _, rawPart := range parts {
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				t.Fatalf("bad final part: %#v", rawPart)
+			}
+			out = append(out, part)
+		}
+		return out
+	default:
+		t.Fatalf("bad final parts: %#v", value)
+		return nil
 	}
 }
 
@@ -160,6 +266,7 @@ func TestApprovalResponseRunEmitsRespondedStateAndToolResult(t *testing.T) {
 		ToolName:    "shell",
 		TargetEvent: "$anchor",
 		SeqStart:    10,
+		PreviewText: "Use supportbrief for incremental patches.",
 	}, agui.ToolApprovalResponse{
 		Approved: false,
 		Reason:   "denied",
@@ -169,6 +276,9 @@ func TestApprovalResponseRunEmitsRespondedStateAndToolResult(t *testing.T) {
 
 	if run.RunID != "run-1" || run.MessageID != "msg-1" {
 		t.Fatalf("approval response must continue the existing run/message, got %#v", run)
+	}
+	if run.Preview.Text != "Use supportbrief for incremental patches." {
+		t.Fatalf("approval response must preserve anchor preview, got %#v", run.Preview)
 	}
 	if len(run.Events) != 2 {
 		t.Fatalf("expected approval response and tool result events, got %#v", run.Events)

@@ -35,17 +35,19 @@ type ReactionEvent struct {
 }
 
 type ApprovalContext struct {
-	ID          string `json:"id"`
-	ThreadID    string `json:"threadId"`
-	RunID       string `json:"runId"`
-	MessageID   string `json:"messageId"`
-	ToolCallID  string `json:"toolCallId"`
-	ToolName    string `json:"toolName"`
-	TargetEvent string `json:"target_event"`
-	AgentID     string `json:"agentId,omitempty"`
-	AgentName   string `json:"agentName,omitempty"`
-	Model       string `json:"model,omitempty"`
-	SeqStart    int    `json:"seqStart,omitempty"`
+	ID               string `json:"id"`
+	ThreadID         string `json:"threadId"`
+	RunID            string `json:"runId"`
+	MessageID        string `json:"messageId"`
+	ToolCallID       string `json:"toolCallId"`
+	ToolName         string `json:"toolName"`
+	TargetEvent      string `json:"target_event"`
+	AgentID          string `json:"agentId,omitempty"`
+	AgentName        string `json:"agentName,omitempty"`
+	Model            string `json:"model,omitempty"`
+	SeqStart         int    `json:"seqStart,omitempty"`
+	PreviewText      string `json:"previewText,omitempty"`
+	PreviewTruncated bool   `json:"previewTruncated,omitempty"`
 }
 
 func DefaultApprovalOptions(approvalID string) []ReactionOption[agui.ToolApprovalResponse] {
@@ -139,6 +141,7 @@ func ApprovalResponseRun(ctx ApprovalContext, response agui.ToolApprovalResponse
 	run.ToolCallID = ctx.ToolCallID
 	run.ApprovalID = ctx.ID
 	run.Status = Status{State: "complete"}
+	run.Preview = Preview{Text: ctx.PreviewText, Truncated: ctx.PreviewTruncated}
 	run.Approvals = []ApprovalSummary{{
 		ID:         ctx.ID,
 		ToolCallID: ctx.ToolCallID,

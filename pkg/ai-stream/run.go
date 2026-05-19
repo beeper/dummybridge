@@ -15,8 +15,9 @@ const (
 	BeeperAIMetadataKey  = "com.beeper.ai.metadata"
 	BeeperAIStreamKey    = "com.beeper.llm"
 	BeeperAIStreamDeltas = BeeperAIStreamKey + ".deltas"
+	FinalPartsCustomName = "com.beeper.ai.final-parts"
 	DefaultModel         = "dummybridge/ag-ui"
-	CarrierBudgetBytes   = 58 * 1024
+	CarrierBudgetBytes   = 40 * 1024
 	PreviewBudgetBytes   = 4096
 	SnapshotTextBytes    = 4096
 )
@@ -303,7 +304,7 @@ func (w *Writer) addFinalSnapshot() {
 	if w == nil || w.Run == nil {
 		return
 	}
-	w.MessagesSnapshot([]agui.UIMessage{w.Run.FinalUIMessageSnapshot(SnapshotTextBytes)})
+	w.MessagesSnapshot([]agui.UIMessage{w.Run.FinalUIMessageSnapshot(0)})
 }
 
 func (w *Writer) finishReasoning() {

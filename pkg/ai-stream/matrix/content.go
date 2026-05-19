@@ -5,8 +5,8 @@ import (
 
 	"github.com/beeper/dummybridge/pkg/ag-ui"
 	"github.com/beeper/dummybridge/pkg/ai-stream"
-	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -16,6 +16,10 @@ func AnchorContent(run aistream.Run) (*event.MessageEventContent, map[string]any
 		body = "..."
 	}
 	rendered := format.RenderMarkdown(body, true, false)
+	if rendered.Format != event.FormatHTML {
+		rendered.Format = event.FormatHTML
+		rendered.FormattedBody = rendered.Body
+	}
 	content := &rendered
 	content.BeeperPerMessageProfile = &event.BeeperPerMessageProfile{
 		ID:          run.AgentID,
