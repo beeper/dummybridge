@@ -13,6 +13,7 @@ import (
 
 	"github.com/beeper/dummybridge/pkg/ag-ui"
 	"github.com/beeper/dummybridge/pkg/ai-stream"
+	"go.mau.fi/util/shlex"
 )
 
 var errApprovalRequested = errors.New("approval requested")
@@ -264,7 +265,10 @@ func buildAIChaosRunPlans(ctx context.Context, baseRunID, threadID string, now t
 }
 
 func parseCommand(input string) (*parsedCommand, error) {
-	tokens := strings.Fields(strings.TrimSpace(input))
+	tokens, err := shlex.Split(input)
+	if err != nil {
+		return nil, fmt.Errorf("invalid command syntax: %w", err)
+	}
 	if len(tokens) == 0 {
 		return &parsedCommand{Name: "help"}, nil
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/beeper/dummybridge/pkg/ai-stream"
 	aibridgev2 "github.com/beeper/dummybridge/pkg/ai-stream/bridgev2"
 	"github.com/rs/zerolog/log"
+	"go.mau.fi/util/exsync"
 	"go.mau.fi/util/jsontime"
 	"go.mau.fi/util/ptr"
 
@@ -34,8 +35,8 @@ type DummyClient struct {
 	UserLogin *bridgev2.UserLogin
 	Connector *DummyConnector
 
-	approvalMu         sync.Mutex
-	approvalSelections map[string]string
+	approvalSelectionsOnce sync.Once
+	approvalSelections     *exsync.Map[string, string]
 }
 
 var _ bridgev2.NetworkAPI = (*DummyClient)(nil)
@@ -303,16 +304,11 @@ func (dc *DummyClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 }
 
 func (dc *DummyClient) resolveApprovalOnce(approvalID, selectedKey string) (string, bool) {
-	dc.approvalMu.Lock()
-	defer dc.approvalMu.Unlock()
-	if dc.approvalSelections == nil {
-		dc.approvalSelections = make(map[string]string)
-	}
-	if existing := dc.approvalSelections[approvalID]; existing != "" {
-		return existing, false
-	}
-	dc.approvalSelections[approvalID] = selectedKey
-	return selectedKey, true
+	dc.approvalSelectionsOnce.Do(func() {
+		dc.approvalSelections = exsync.NewMap[string, string]()
+	})
+	selected, alreadyResolved := dc.approvalSelections.GetOrSet(approvalID, selectedKey)
+	return selected, !alreadyResolved
 }
 
 func (dc *DummyClient) cleanupApprovalReactions(ctx context.Context, portal *bridgev2.Portal, approvalMessageID networkid.MessageID, selectedKey, reactionKey string, msg *bridgev2.MatrixReaction) {

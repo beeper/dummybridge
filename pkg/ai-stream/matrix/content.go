@@ -2,7 +2,6 @@ package matrix
 
 import (
 	"fmt"
-	"html"
 
 	"github.com/beeper/dummybridge/pkg/ag-ui"
 	"github.com/beeper/dummybridge/pkg/ai-stream"
@@ -17,11 +16,8 @@ func AnchorContent(run aistream.Run) (*event.MessageEventContent, map[string]any
 		body = "..."
 	}
 	rendered := format.RenderMarkdown(body, true, false)
-	if rendered.Format != event.FormatHTML {
-		rendered.Format = event.FormatHTML
-		rendered.FormattedBody = html.EscapeString(rendered.Body)
-	}
 	content := &rendered
+	content.EnsureHasHTML()
 	content.BeeperPerMessageProfile = &event.BeeperPerMessageProfile{
 		ID:          run.AgentID,
 		Displayname: run.AgentName,
@@ -37,16 +33,9 @@ func AnchorContent(run aistream.Run) (*event.MessageEventContent, map[string]any
 }
 
 func CarrierContent(carrier aistream.Carrier, targetEventID id.EventID) (*event.MessageEventContent, map[string]any) {
-	content := &event.MessageEventContent{
-		MsgType:  event.MsgText,
-		Body:     "",
-		Mentions: &event.Mentions{},
-		RelatesTo: &event.RelatesTo{
-			Type:    event.RelReference,
-			EventID: targetEventID,
-		},
-	}
-	return content, aistream.CarrierContent(carrier.Envelopes)
+	content := format.TextToContent("")
+	content.SetRelatesTo(&event.RelatesTo{Type: event.RelReference, EventID: targetEventID})
+	return &content, aistream.CarrierContent(carrier.Envelopes)
 }
 
 func ApprovalContent(ctx aistream.ApprovalContext, options []aistream.ReactionOption[agui.ToolApprovalResponse]) (*event.MessageEventContent, map[string]any) {
@@ -55,13 +44,9 @@ func ApprovalContent(ctx aistream.ApprovalContext, options []aistream.ReactionOp
 	if len(options) > 0 {
 		body += "\nReact with one of the listed options."
 	}
-	content := &event.MessageEventContent{
-		MsgType:  event.MsgText,
-		Body:     body,
-		Mentions: &event.Mentions{},
-	}
+	content := format.TextToContent(body)
 	if ctx.TargetEvent != "" {
-		content.RelatesTo = &event.RelatesTo{Type: event.RelReference, EventID: id.EventID(ctx.TargetEvent)}
+		content.SetRelatesTo(&event.RelatesTo{Type: event.RelReference, EventID: id.EventID(ctx.TargetEvent)})
 	}
 	extra := map[string]any{
 		"com.beeper.ai.approval": map[string]any{
@@ -78,7 +63,7 @@ func ApprovalContent(ctx aistream.ApprovalContext, options []aistream.ReactionOp
 			"reactions": ReactionOptionsAsAny(options),
 		},
 	}
-	return content, extra
+	return &content, extra
 }
 
 func ReactionOptionsAsAny(options []aistream.ReactionOption[agui.ToolApprovalResponse]) []any {
