@@ -7,7 +7,7 @@ WORKDIR /build
 ENV CGO_ENABLED=1
 RUN go build -o /usr/bin/dummybridge ./cmd/dummybridge
 
-FROM alpine:3.20
+FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates olm su-exec bash jq yq curl \
 	&& addgroup -S dummybridge \
