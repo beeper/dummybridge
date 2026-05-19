@@ -293,12 +293,14 @@ func (dc *DummyClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 	}
 	dc.queueAIApprovalResponse(ctx, msg.Portal, msg.TargetMessage, selected.Value)
 
-	log.Info().
+	logger := log.Info().
 		Str("approval_id", approvalID).
 		Str("reaction", reaction).
-		Bool("approved", selected.Value.Approved).
-		Stringer("sender", msg.Event.Sender).
-		Msg("Resolved dummy AI approval from Matrix reaction")
+		Bool("approved", selected.Value.Approved)
+	if msg.Event != nil {
+		logger = logger.Stringer("sender", msg.Event.Sender)
+	}
+	logger.Msg("Resolved dummy AI approval from Matrix reaction")
 
 	return &database.Reaction{}, nil
 }
