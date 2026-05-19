@@ -64,11 +64,15 @@ func ApprovalPrompt(portalKey networkid.PortalKey, sender networkid.UserID, ctx 
 }
 
 func ApprovalOptionReaction[T any](portalKey networkid.PortalKey, sender networkid.UserID, ctx aistream.ApprovalContext, option aistream.ReactionOption[T], timestamp time.Time) *simplevent.Reaction {
+	emoji := option.ID
+	if len(option.Values) > 0 {
+		emoji = option.Values[0]
+	}
 	return &simplevent.Reaction{
 		EventMeta:     eventMeta(bridgev2.RemoteEventReaction, portalKey, sender, timestamp),
 		TargetMessage: networkid.MessageID(ctx.ID),
 		EmojiID:       networkid.EmojiID(option.ID),
-		Emoji:         option.Values[0],
+		Emoji:         emoji,
 		ExtraContent: map[string]any{
 			"com.beeper.ai.approval_option": map[string]any{
 				"approvalId": ctx.ID,
