@@ -2,6 +2,7 @@ package matrix
 
 import (
 	"fmt"
+	"html"
 
 	"github.com/beeper/dummybridge/pkg/ag-ui"
 	"github.com/beeper/dummybridge/pkg/ai-stream"
@@ -18,7 +19,7 @@ func AnchorContent(run aistream.Run) (*event.MessageEventContent, map[string]any
 	rendered := format.RenderMarkdown(body, true, false)
 	if rendered.Format != event.FormatHTML {
 		rendered.Format = event.FormatHTML
-		rendered.FormattedBody = rendered.Body
+		rendered.FormattedBody = html.EscapeString(rendered.Body)
 	}
 	content := &rendered
 	content.BeeperPerMessageProfile = &event.BeeperPerMessageProfile{
