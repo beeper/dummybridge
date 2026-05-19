@@ -482,7 +482,11 @@ func (dc *DummyClient) queueAIResponse(ctx context.Context, portal *bridgev2.Por
 		placeholderID := networkid.MessageID(plan.Run.MessageID)
 		dc.UserLogin.QueueRemoteEvent(aibridgev2.Anchor(portal.PortalKey, aiGhostID, initialAIAnchorRun(*plan.Run), timestamp))
 
-		go dc.queueAIRunStreamAndMetadata(portal, placeholderID, *plan.Run)
+		dc.wg.Add(1)
+		go func(portal *bridgev2.Portal, messageID networkid.MessageID, run aistream.Run) {
+			defer dc.wg.Done()
+			dc.queueAIRunStreamAndMetadata(portal, messageID, run)
+		}(portal, placeholderID, *plan.Run)
 	}
 }
 
