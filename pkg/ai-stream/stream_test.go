@@ -230,6 +230,24 @@ func TestValidateRejectsLegacyOrInvalidToolResultShape(t *testing.T) {
 	}
 }
 
+func TestFinalUIMessageCarriesToolCallMetadata(t *testing.T) {
+	run := NewRun("run-1", "thread-1", DefaultModel, "ai", "AI", time.Unix(10, 0))
+	writer := NewWriter(run, func() time.Time { return time.Unix(10, 0) })
+	writer.ToolStartWithMetadata("tool-1", "calendar.get_events", 0, nil, map[string]any{
+		"displayName": "List Calendar Events",
+		"iconId":      "3257-5951",
+	})
+
+	message := run.FinalUIMessage(0, true)
+	if len(message.Parts) != 1 {
+		t.Fatalf("expected one part, got %#v", message.Parts)
+	}
+	metadata, ok := message.Parts[0]["metadata"].(map[string]any)
+	if !ok || metadata["displayName"] != "List Calendar Events" || metadata["iconId"] != "3257-5951" {
+		t.Fatalf("bad tool metadata: %#v", message.Parts[0])
+	}
+}
+
 func TestApprovalResolverMatchesEmojiKeysAndAliases(t *testing.T) {
 	choices := DefaultApprovalChoices()
 	for _, key := range []string{"✅", "approve"} {
@@ -328,7 +346,7 @@ func TestApprovalNoticeOwnsHiddenMessagePayloadShape(t *testing.T) {
 		t.Fatalf("bad approval notice choices: %#v", notice["choices"])
 	}
 	first, ok := choices[0].(map[string]any)
-	if !ok || first["key"] != ApprovalChoiceApprove || first["label"] != "Approve" || first["alias"] != "✅" {
+	if !ok || first["key"] != ApprovalChoiceApprove || first["label"] != "Allow once" || first["alias"] != "✅" {
 		t.Fatalf("bad first approval choice: %#v", choices[0])
 	}
 	if _, ok := first["style"]; ok {

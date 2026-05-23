@@ -828,7 +828,7 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 	if spec.Approval {
 		approval = &agui.ToolApproval{ID: approvalID, NeedsApproval: true}
 	}
-	w.ToolStart(toolCallID, spec.Name, spec.SequenceIndex-1, approval)
+	w.ToolStartWithMetadata(toolCallID, spec.Name, spec.SequenceIndex-1, approval, toolDisplayMetadata(spec.Name))
 	annotateProviderRawEvent(w, spec, "tool_call_start")
 	if spec.InputError {
 		w.ToolArgs(toolCallID, jsonToolInput(input), nil)
@@ -883,6 +883,51 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 		annotateProviderRawEvent(w, spec, "tool_call_end")
 	}
 	return nil
+}
+
+func toolDisplayMetadata(name string) map[string]any {
+	displayName := titleToolName(name)
+	metadata := map[string]any{
+		"displayName": displayName,
+	}
+	switch strings.ToLower(name) {
+	case "calendar.get_events", "google_calendar.get_events", "google-calendar.get-events":
+		metadata["displayName"] = "List Calendar Events"
+		metadata["iconId"] = "3257-5951"
+		metadata["provider"] = map[string]any{
+			"id":          "google-calendar",
+			"displayName": "Google Calendar",
+			"iconId":      "3257-5951",
+		}
+	case "linear.list_issues", "linear.list-issues", "list_issues", "list-issues":
+		metadata["displayName"] = "List Issues"
+		metadata["iconId"] = "3257-5945"
+		metadata["provider"] = map[string]any{
+			"id":          "linear",
+			"displayName": "Linear",
+			"iconId":      "3257-5945",
+		}
+	case "shell":
+		metadata["displayName"] = "Run Command"
+		metadata["iconId"] = "3255-2310"
+	case "fetch":
+		metadata["displayName"] = "Fetch Web"
+		metadata["iconId"] = "source-placeholder"
+	}
+	return metadata
+}
+
+func titleToolName(name string) string {
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '_' || r == '-' || r == '.'
+	})
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 func approvalIDForRun(runID, toolCallID string) string {

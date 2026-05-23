@@ -174,12 +174,12 @@ func DefaultApprovalChoices() []ApprovalChoice {
 	return []ApprovalChoice{
 		{
 			Key:   ApprovalChoiceApprove,
-			Label: "Approve",
+			Label: "Allow once",
 			Alias: "✅",
 		},
 		{
 			Key:   ApprovalChoiceAlwaysApprove,
-			Label: "Always approve",
+			Label: "Allow always",
 			Alias: "☑️",
 		},
 		{

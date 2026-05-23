@@ -222,8 +222,12 @@ func (w *Writer) StepFinish(stepID string) {
 }
 
 func (w *Writer) ToolStart(toolCallID, name string, index int, approval *agui.ToolApproval) {
+	w.ToolStartWithMetadata(toolCallID, name, index, approval, nil)
+}
+
+func (w *Writer) ToolStartWithMetadata(toolCallID, name string, index int, approval *agui.ToolApproval, metadata map[string]any) {
 	idx := index
-	w.Add(w.builder.ToolCallStart(w.Run.MessageID, toolCallID, name, &idx, approval))
+	w.Add(w.builder.ToolCallStartWithMetadata(w.Run.MessageID, toolCallID, name, &idx, approval, metadata))
 	if approval != nil {
 		w.recordApprovalRequest(toolCallID, name, approval)
 	}
@@ -516,6 +520,9 @@ func (t Run) FinalUIMessage(textBudget int, includeThinking bool) agui.UIMessage
 			}
 			if approval, ok := evt["approval"]; ok {
 				part["approval"] = approval
+			}
+			if metadata, ok := evt["metadata"]; ok {
+				part["metadata"] = metadata
 			}
 			toolParts[toolCallID] = appendPart(part)
 		case agui.EventToolCallArgs:

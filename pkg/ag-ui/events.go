@@ -221,6 +221,10 @@ func (b EventBuilder) ReasoningMessageEnd(messageID string) Event {
 }
 
 func (b EventBuilder) ToolCallStart(messageID, toolCallID, name string, index *int, approval *ToolApproval) Event {
+	return b.ToolCallStartWithMetadata(messageID, toolCallID, name, index, approval, nil)
+}
+
+func (b EventBuilder) ToolCallStartWithMetadata(messageID, toolCallID, name string, index *int, approval *ToolApproval, metadata map[string]any) Event {
 	evt := b.base(EventToolCallStart)
 	if messageID != "" {
 		evt["parentMessageId"] = messageID
@@ -228,6 +232,9 @@ func (b EventBuilder) ToolCallStart(messageID, toolCallID, name string, index *i
 	evt["toolCallId"] = toolCallID
 	evt["toolCallName"] = name
 	evt["toolName"] = name
+	if len(metadata) > 0 {
+		evt["metadata"] = metadata
+	}
 	if index != nil {
 		evt["index"] = *index
 	}

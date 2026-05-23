@@ -136,6 +136,10 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 			if approval.ID != "approval-run-1-dummy-tool-1-shell" || !approval.NeedsApproval {
 				t.Fatalf("bad approval metadata: %#v", approval)
 			}
+			metadata, ok := evt["metadata"].(map[string]any)
+			if !ok || metadata["displayName"] != "Run Command" || metadata["iconId"] != "3255-2310" {
+				t.Fatalf("bad tool display metadata: %#v", evt["metadata"])
+			}
 			foundToolStart = true
 		}
 		if evt["type"] == agui.EventToolCallEnd {
@@ -291,7 +295,7 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 		t.Fatalf("approval-requested stream event missing choices: %#v", annotatedValue["choices"])
 	}
 	firstChoice, ok := choices[0].(map[string]any)
-	if !ok || firstChoice["key"] != aistream.ApprovalChoiceApprove || firstChoice["label"] != "Approve" {
+	if !ok || firstChoice["key"] != aistream.ApprovalChoiceApprove || firstChoice["label"] != "Allow once" {
 		t.Fatalf("approval-requested stream event has bad choice shape: %#v", choices[0])
 	}
 
