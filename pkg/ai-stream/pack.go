@@ -4,9 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/beeper/dummybridge/pkg/ag-ui"
 )
+
+func truncateUTF8(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
+}
 
 type Envelope struct {
 	ThreadID    string     `json:"threadId"`
@@ -306,7 +318,7 @@ func sanitizeRawEvent(evt agui.Event, budget int) agui.Event {
 		delete(cp, "rawEvent")
 		cp["rawEventTruncated"] = true
 	} else if len(raw) > 2048 {
-		cp["rawEvent"] = string(raw[:2048])
+		cp["rawEvent"] = truncateUTF8(string(raw), 2048)
 		cp["rawEventTruncated"] = true
 	}
 	if JSONSize(cp) > budget {

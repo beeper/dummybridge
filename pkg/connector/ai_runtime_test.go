@@ -770,6 +770,115 @@ func TestBuildDemoVisibleTextIsMarkdownRichAndDeterministic(t *testing.T) {
 	t.Fatalf("expected markdown-rich text, got %q", first)
 }
 
+func TestMultiApprovalContinuationKeepsLaterPrompts(t *testing.T) {
+	command := "stream-tools 240 shell#approval fetch#approval --seed=7 --chunk-chars=32:32"
+	approvalCtx := aistream.ApprovalContext{
+		ID:          "approval-run-1-dummy-tool-1-shell",
+		ThreadID:    "thread-1",
+		RunID:       "run-1",
+		MessageID:   "msg-run-1",
+		Command:     command,
+		ToolCallID:  "dummy-tool-1-shell",
+		ToolName:    "shell",
+		TargetEvent: "$anchor",
+		AgentID:     "ai",
+		AgentName:   "AI",
+		SeqStart:    12,
+	}
+	run, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+		ID:       approvalCtx.ID,
+		Approved: true,
+	}, time.Unix(20, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Prompts) != 1 {
+		t.Fatalf("expected second approval prompt to be preserved, got %#v", run.Prompts)
+	}
+	if run.Prompts[0].ToolName != "fetch" {
+		t.Fatalf("expected preserved prompt to belong to fetch, got %#v", run.Prompts[0])
+	}
+	if run.Status.State != "streaming" {
+		t.Fatalf("expected continuation with pending approval to remain streaming, got %#v", run.Status)
+	}
+}
+
+func TestApprovalContinuationReplaysRandomRunWithImplicitSeed(t *testing.T) {
+	// Iterate clocks until the random-action profile produces an approval
+	// request — the seed is implicit (resolved from now()), and the bug being
+	// guarded against is that the continuation would otherwise pick a fresh
+	// seed and lose the original toolCallID.
+	for tick := int64(1); tick <= 500; tick++ {
+		now := time.Unix(tick, 0)
+		plans, err := buildAIRunPlans(context.Background(), "run-rand", "thread-rand", "stream-random 1 --profile=tools --allow-approval", now, "ai", "AI")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plans) != 1 || plans[0].Run == nil {
+			t.Fatalf("expected one random plan, got %#v", plans)
+		}
+		originalRun := plans[0].Run
+		if originalRun.ApprovalID == "" {
+			continue
+		}
+		if !strings.Contains(plans[0].EffectiveCommand, "--seed=") {
+			t.Fatalf("effective command must include resolved seed: %q", plans[0].EffectiveCommand)
+		}
+		approvalCtx := aistream.ApprovalContext{
+			ID:          originalRun.ApprovalID,
+			ThreadID:    originalRun.ThreadID,
+			RunID:       originalRun.RunID,
+			MessageID:   originalRun.MessageID,
+			Command:     plans[0].EffectiveCommand,
+			ToolCallID:  originalRun.ToolCallID,
+			TargetEvent: "$anchor",
+			AgentID:     "ai",
+			AgentName:   "AI",
+			SeqStart:    50,
+		}
+		continuation, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+			ID:       approvalCtx.ID,
+			Approved: true,
+		}, now.Add(time.Hour))
+		if err != nil {
+			t.Fatalf("continuation failed: %v", err)
+		}
+		if len(continuation.Events) == 0 {
+			t.Fatalf("expected continuation events for random run, got none")
+		}
+		if continuation.Events[0]["type"] != agui.EventCustom || continuation.Events[0]["name"] != agui.ApprovalCustomResponded {
+			t.Fatalf("first continuation event should acknowledge approval, got %#v", continuation.Events[0])
+		}
+		return
+	}
+	t.Fatal("no implicit-seed random run produced an approval prompt in the tested range")
+}
+
+func TestChaosSubRunCommandIsParseable(t *testing.T) {
+	plans, err := buildAIRunPlans(context.Background(), "run-chaos", "thread-chaos", "stream-chaos 2 1 --allow-approval --seed=11", time.Unix(0, 0), "ai", "AI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plans) != 2 {
+		t.Fatalf("expected two chaos sub-runs, got %d", len(plans))
+	}
+	for i, plan := range plans {
+		if !strings.HasPrefix(plan.EffectiveCommand, "stream-random ") {
+			t.Fatalf("chaos plan %d must render as stream-random, got %q", i, plan.EffectiveCommand)
+		}
+		if !strings.Contains(plan.EffectiveCommand, "--seed=") {
+			t.Fatalf("chaos sub-run command must include explicit seed: %q", plan.EffectiveCommand)
+		}
+		cmd, err := parseCommand(plan.EffectiveCommand)
+		if err != nil {
+			t.Fatalf("chaos sub-run command did not re-parse: %v (%q)", err, plan.EffectiveCommand)
+		}
+		if cmd == nil || cmd.Random == nil || !cmd.Random.SeedSet {
+			t.Fatalf("re-parsed chaos sub-run lost seed: %#v", cmd)
+		}
+	}
+}
+
 func jsonResultMap(t *testing.T, value any) map[string]any {
 	t.Helper()
 	text, ok := value.(string)

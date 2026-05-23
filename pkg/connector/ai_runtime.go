@@ -150,6 +150,11 @@ type aiRunner struct {
 type aiRunPlan struct {
 	Run   *aistream.Run
 	Delay time.Duration
+	// EffectiveCommand is the canonical command form used to deterministically
+	// replay this run during approval continuation. For random/chaos sub-runs
+	// (where the seed was derived implicitly) this includes the resolved
+	// --seed=N so the continuation reproduces the same action sequence.
+	EffectiveCommand string
 }
 
 func virtualAIRuntime(now time.Time) aiRuntime {
@@ -189,16 +194,71 @@ func buildAIRunPlans(ctx context.Context, runID, threadID, input string, now tim
 		writer.Start()
 		writer.Text(err.Error() + "\n\n" + helpText())
 		writer.Finish(agui.FinishReasonStop)
-		return []aiRunPlan{{Run: run}}, nil
+		return []aiRunPlan{{Run: run, EffectiveCommand: input}}, nil
 	}
 	if cmd != nil && cmd.Chaos != nil {
 		return buildAIChaosRunPlans(ctx, runID, threadID, now, *cmd.Chaos, agentID, agentName)
 	}
+	resolveCommandSeed(cmd, now)
 	run, err := buildAIRunFromCommand(ctx, runID, threadID, now, cmd, agentID, agentName)
 	if err != nil {
 		return nil, err
 	}
-	return []aiRunPlan{{Run: run}}, nil
+	return []aiRunPlan{{Run: run, EffectiveCommand: canonicalCommand(input, cmd)}}, nil
+}
+
+// resolveCommandSeed fills in an implicit seed for commands that derive their
+// random behavior from the current time, so the continuation can replay the
+// exact same sequence.
+func resolveCommandSeed(cmd *parsedCommand, now time.Time) {
+	if cmd == nil {
+		return
+	}
+	switch {
+	case cmd.Lorem != nil && !cmd.Lorem.Options.SeedSet:
+		cmd.Lorem.Options.Seed = now.UnixNano()
+		cmd.Lorem.Options.SeedSet = true
+	case cmd.Tools != nil && !cmd.Tools.Options.SeedSet:
+		cmd.Tools.Options.Seed = now.UnixNano()
+		cmd.Tools.Options.SeedSet = true
+	case cmd.Random != nil && !cmd.Random.SeedSet:
+		cmd.Random.Seed = now.UnixNano()
+		cmd.Random.SeedSet = true
+	}
+}
+
+// canonicalCommand returns a command string that, when re-parsed, reproduces
+// the same run as cmd. If the original input already encoded all randomness
+// inputs (e.g. an explicit --seed), it is returned as-is.
+func canonicalCommand(input string, cmd *parsedCommand) string {
+	if cmd == nil {
+		return input
+	}
+	switch {
+	case cmd.Lorem != nil:
+		return ensureSeedFlag(input, cmd.Lorem.Options.Seed, cmd.Lorem.Options.SeedSet)
+	case cmd.Tools != nil:
+		return ensureSeedFlag(input, cmd.Tools.Options.Seed, cmd.Tools.Options.SeedSet)
+	case cmd.Random != nil:
+		return ensureSeedFlag(input, cmd.Random.Seed, cmd.Random.SeedSet)
+	}
+	return input
+}
+
+func ensureSeedFlag(input string, seed int64, seedSet bool) string {
+	if !seedSet || hasSeedFlag(input) {
+		return input
+	}
+	return strings.TrimRight(input, " ") + " --seed=" + strconv.FormatInt(seed, 10)
+}
+
+func hasSeedFlag(input string) bool {
+	for _, token := range strings.Fields(input) {
+		if strings.HasPrefix(token, "--seed=") || token == "--seed" {
+			return true
+		}
+	}
+	return false
 }
 
 func buildAIRunFromCommand(ctx context.Context, runID, threadID string, now time.Time, cmd *parsedCommand, agentID, agentName string) (*aistream.Run, error) {
@@ -264,16 +324,42 @@ func buildAIChaosRunPlans(ctx context.Context, baseRunID, threadID string, now t
 				AllowApproval: cmd.AllowApproval,
 			},
 		}
-		run, err := buildAIRunFromCommand(ctx, runID, threadID, now.Add(delay), &parsedCommand{
-			Name:   "stream-random",
-			Random: &randomCmd,
-		}, agentID, agentName)
+		parsed := &parsedCommand{Name: "stream-random", Random: &randomCmd}
+		run, err := buildAIRunFromCommand(ctx, runID, threadID, now.Add(delay), parsed, agentID, agentName)
 		if err != nil {
 			return nil, err
 		}
-		plans = append(plans, aiRunPlan{Run: run, Delay: delay})
+		plans = append(plans, aiRunPlan{
+			Run:              run,
+			Delay:            delay,
+			EffectiveCommand: chaosSubRunCommand(randomCmd),
+		})
 	}
 	return plans, nil
+}
+
+// chaosSubRunCommand renders a stream-random command equivalent to the sub-run
+// derived from a stream-chaos invocation. Used as the canonical command stored
+// in the approval context so a chaos approval can be replayed deterministically.
+func chaosSubRunCommand(cmd randomCommand) string {
+	parts := []string{
+		"stream-random",
+		strconv.Itoa(int(cmd.Duration / time.Second)),
+		"--actions=" + strconv.Itoa(cmd.Actions),
+		"--delay-ms=" + strconv.Itoa(int(cmd.DelayMin/time.Millisecond)) + ":" + strconv.Itoa(int(cmd.DelayMax/time.Millisecond)),
+		"--profile=" + cmd.Profile,
+		"--seed=" + strconv.FormatInt(cmd.Seed, 10),
+	}
+	if cmd.AllowAbort {
+		parts = append(parts, "--allow-abort")
+	}
+	if cmd.AllowError {
+		parts = append(parts, "--allow-error")
+	}
+	if cmd.AllowApproval {
+		parts = append(parts, "--allow-approval")
+	}
+	return strings.Join(parts, " ")
 }
 
 func parseCommand(input string) (*parsedCommand, error) {

@@ -386,13 +386,19 @@ func ValidateEvent(evt Event) error {
 	case EventTextMessageStart:
 		return require(evt, "messageId", "role")
 	case EventTextMessageContent:
-		return require(evt, "messageId", "delta")
+		if err := require(evt, "messageId"); err != nil {
+			return err
+		}
+		return requireStringField(evt, "delta")
 	case EventTextMessageEnd:
 		return require(evt, "messageId")
 	case EventReasoningStart, EventReasoningEnd, EventReasoningMsgStart, EventReasoningMsgEnd:
 		return require(evt, "messageId")
 	case EventReasoningMsgCont:
-		return require(evt, "messageId", "delta")
+		if err := require(evt, "messageId"); err != nil {
+			return err
+		}
+		return requireStringField(evt, "delta")
 	case EventToolCallStart:
 		if err := require(evt, "toolCallId", "toolCallName"); err != nil {
 			return err
@@ -404,7 +410,10 @@ func ValidateEvent(evt Event) error {
 		}
 		return validateStringSet(evt, "state", true, validToolStates)
 	case EventToolCallArgs:
-		if err := require(evt, "toolCallId", "delta"); err != nil {
+		if err := require(evt, "toolCallId"); err != nil {
+			return err
+		}
+		if err := requireStringField(evt, "delta"); err != nil {
 			return err
 		}
 		if err := validateStringSet(evt, "state", false, validToolStates); err != nil {
@@ -645,6 +654,24 @@ func require(evt Event, keys ...string) error {
 		if !ok || emptyValue(value) {
 			return fmt.Errorf("%s missing %s", evt["type"], key)
 		}
+	}
+	return nil
+}
+
+// requireStringField checks that the field is present and is a string.
+// Unlike require, it accepts whitespace-only strings — streaming deltas can
+// legitimately consist only of spaces or newlines between tokens.
+func requireStringField(evt Event, key string) error {
+	value, ok := evt[key]
+	if !ok {
+		return fmt.Errorf("%s missing %s", evt["type"], key)
+	}
+	str, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("%s has invalid %s %T", evt["type"], key, value)
+	}
+	if str == "" {
+		return fmt.Errorf("%s missing %s", evt["type"], key)
 	}
 	return nil
 }
