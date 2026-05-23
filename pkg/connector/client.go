@@ -444,7 +444,7 @@ func isAIDemoCommandContent(content *event.MessageEventContent) bool {
 		return false
 	}
 	switch strings.ToLower(tokens[0]) {
-	case "help", "/help", "!help", "stream-lorem", "stream-tools", "stream-random", "stream-chaos":
+	case "help", "/help", "!help", "stream", "stream-tools":
 		return true
 	case "dummybridge":
 		return len(tokens) > 1 && strings.EqualFold(tokens[1], "help")
@@ -846,6 +846,7 @@ func (dc *DummyClient) queueAIApprovalPrompt(portal *bridgev2.Portal, sender net
 		AgentName:        run.AgentName,
 		Model:            run.Model,
 		SeqStart:         prompt.SeqStart,
+		PriorApprovals:   approvalResponsesBeforePrompt(run.Events, prompt.ID),
 		PreviewText:      run.Preview.Text,
 		PreviewTruncated: run.Preview.Truncated,
 	}
@@ -925,9 +926,14 @@ func buildAIApprovalContinuationRun(ctx context.Context, approvalCtx aistream.Ap
 	if response.ID == "" {
 		response.ID = approvalCtx.ID
 	}
-	run, err := buildAIRunFromCommandWithApprovals(ctx, approvalCtx.RunID, approvalCtx.ThreadID, now, cmd, approvalCtx.AgentID, approvalCtx.AgentName, map[string]agui.ToolApprovalResponse{
-		approvalCtx.ID: response,
-	})
+	approvals := make(map[string]agui.ToolApprovalResponse, len(approvalCtx.PriorApprovals)+1)
+	for _, prior := range approvalCtx.PriorApprovals {
+		if prior.ID != "" {
+			approvals[prior.ID] = prior
+		}
+	}
+	approvals[approvalCtx.ID] = response
+	run, err := buildAIRunFromCommandWithApprovals(ctx, approvalCtx.RunID, approvalCtx.ThreadID, now, cmd, approvalCtx.AgentID, approvalCtx.AgentName, approvals)
 	if err != nil {
 		return aistream.Run{}, err
 	}
@@ -950,6 +956,75 @@ func buildAIApprovalContinuationRun(ctx context.Context, approvalCtx aistream.Ap
 	// and must not be queued again.
 	run.Prompts = filterPendingPrompts(run.Prompts, approvalCtx.ID, run.Events)
 	return *run, nil
+}
+
+func approvalResponsesBeforePrompt(events []agui.Event, promptID string) []agui.ToolApprovalResponse {
+	if promptID == "" {
+		return nil
+	}
+	var responses []agui.ToolApprovalResponse
+	for _, evt := range events {
+		if evt["type"] != agui.EventCustom {
+			continue
+		}
+		name, _ := evt["name"].(string)
+		value, _ := evt["value"].(map[string]any)
+		if value == nil {
+			continue
+		}
+		if name == agui.ApprovalCustomRequested && aistream.ApprovalIDFromRequestedValue(value) == promptID {
+			return responses
+		}
+		if name != agui.ApprovalCustomResponded {
+			continue
+		}
+		if response, ok := approvalResponseFromAny(value["approval"]); ok && response.ID != "" {
+			responses = append(responses, response)
+		}
+	}
+	return responses
+}
+
+func approvalResponseFromAny(value any) (agui.ToolApprovalResponse, bool) {
+	switch typed := value.(type) {
+	case agui.ToolApprovalResponse:
+		return typed, typed.ID != ""
+	case *agui.ToolApprovalResponse:
+		if typed == nil {
+			return agui.ToolApprovalResponse{}, false
+		}
+		return *typed, typed.ID != ""
+	case map[string]any:
+		return approvalResponseFromMap(typed)
+	default:
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return agui.ToolApprovalResponse{}, false
+		}
+		var response agui.ToolApprovalResponse
+		if err = json.Unmarshal(raw, &response); err != nil {
+			return agui.ToolApprovalResponse{}, false
+		}
+		return response, response.ID != ""
+	}
+}
+
+func approvalResponseFromMap(value map[string]any) (agui.ToolApprovalResponse, bool) {
+	idValue, _ := value["id"].(string)
+	if idValue == "" {
+		return agui.ToolApprovalResponse{}, false
+	}
+	response := agui.ToolApprovalResponse{ID: idValue}
+	if approved, ok := value["approved"].(bool); ok {
+		response.Approved = approved
+	}
+	if always, ok := value["always"].(bool); ok {
+		response.Always = always
+	}
+	if reason, ok := value["reason"].(string); ok {
+		response.Reason = reason
+	}
+	return response, true
 }
 
 func filterPendingPrompts(prompts []aistream.ApprovalPrompt, resolvedID string, events []agui.Event) []aistream.ApprovalPrompt {

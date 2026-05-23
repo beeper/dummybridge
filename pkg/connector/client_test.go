@@ -52,10 +52,9 @@ func TestAIDemoCommandContentOnlyMatchesExplicitDemoCommands(t *testing.T) {
 		"/help",
 		"!help",
 		"dummybridge help",
-		"stream-lorem 100",
+		"stream 20",
 		"stream-tools 100 shell",
-		"stream-random 1",
-		"stream-chaos 2 1",
+		"stream 1 --runs=2",
 	} {
 		if !isAIDemoCommandContent(&event.MessageEventContent{Body: body}) {
 			t.Fatalf("expected AI demo command for %q", body)

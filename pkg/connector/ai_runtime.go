@@ -108,10 +108,15 @@ type sharedStreamOptions struct {
 }
 
 type randomCommand struct {
-	Duration time.Duration
-	Actions  int
-	DelayMin time.Duration
-	DelayMax time.Duration
+	Duration   time.Duration
+	Actions    int
+	Chars      int
+	DelayMin   time.Duration
+	DelayMax   time.Duration
+	Terminal   string
+	Runs       int
+	StaggerMin time.Duration
+	StaggerMax time.Duration
 	sharedStreamOptions
 }
 
@@ -200,6 +205,9 @@ func buildAIRunPlans(ctx context.Context, runID, threadID, input string, now tim
 		return buildAIChaosRunPlans(ctx, runID, threadID, now, *cmd.Chaos, agentID, agentName)
 	}
 	resolveCommandSeed(cmd, now)
+	if cmd != nil && cmd.Random != nil && cmd.Random.Runs > 1 {
+		return buildAIStreamRunPlans(ctx, runID, threadID, now, *cmd.Random, agentID, agentName)
+	}
 	run, err := buildAIRunFromCommand(ctx, runID, threadID, now, cmd, agentID, agentName)
 	if err != nil {
 		return nil, err
@@ -324,7 +332,7 @@ func buildAIChaosRunPlans(ctx context.Context, baseRunID, threadID string, now t
 				AllowApproval: cmd.AllowApproval,
 			},
 		}
-		parsed := &parsedCommand{Name: "stream-random", Random: &randomCmd}
+		parsed := &parsedCommand{Name: "stream", Random: &randomCmd}
 		run, err := buildAIRunFromCommand(ctx, runID, threadID, now.Add(delay), parsed, agentID, agentName)
 		if err != nil {
 			return nil, err
@@ -338,26 +346,63 @@ func buildAIChaosRunPlans(ctx context.Context, baseRunID, threadID string, now t
 	return plans, nil
 }
 
-// chaosSubRunCommand renders a stream-random command equivalent to the sub-run
-// derived from a stream-chaos invocation. Used as the canonical command stored
-// in the approval context so a chaos approval can be replayed deterministically.
+func buildAIStreamRunPlans(ctx context.Context, baseRunID, threadID string, now time.Time, cmd randomCommand, agentID, agentName string) ([]aiRunPlan, error) {
+	seed := cmd.Seed
+	if !cmd.SeedSet {
+		seed = now.UnixNano()
+	}
+	rng := rand.New(rand.NewSource(seed))
+	plans := make([]aiRunPlan, 0, cmd.Runs)
+	for i := range cmd.Runs {
+		var delay time.Duration
+		if i > 0 {
+			delay = aiRunner{runtime: virtualAIRuntime(now)}.sampleDelay(rng, cmd.StaggerMin, cmd.StaggerMax)
+		}
+		child := cmd
+		child.Runs = 1
+		child.Seed = seed + int64(i+1)*97
+		child.SeedSet = true
+		parsed := &parsedCommand{Name: "stream", Random: &child}
+		run, err := buildAIRunFromCommand(ctx, fmt.Sprintf("%s-%d", baseRunID, i+1), threadID, now.Add(delay), parsed, agentID, agentName)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, aiRunPlan{
+			Run:              run,
+			Delay:            delay,
+			EffectiveCommand: streamSubRunCommand(child),
+		})
+	}
+	return plans, nil
+}
+
 func chaosSubRunCommand(cmd randomCommand) string {
+	return streamSubRunCommand(cmd)
+}
+
+func streamSubRunCommand(cmd randomCommand) string {
 	parts := []string{
-		"stream-random",
+		"stream",
 		strconv.Itoa(int(cmd.Duration / time.Second)),
 		"--actions=" + strconv.Itoa(cmd.Actions),
 		"--delay-ms=" + strconv.Itoa(int(cmd.DelayMin/time.Millisecond)) + ":" + strconv.Itoa(int(cmd.DelayMax/time.Millisecond)),
 		"--profile=" + cmd.Profile,
 		"--seed=" + strconv.FormatInt(cmd.Seed, 10),
 	}
+	if cmd.Chars > 0 {
+		parts = append(parts, "--chars="+strconv.Itoa(cmd.Chars))
+	}
+	if cmd.Terminal != "" {
+		parts = append(parts, "--terminal="+cmd.Terminal)
+	}
+	if !cmd.AllowApproval {
+		parts = append(parts, "--no-approval")
+	}
 	if cmd.AllowAbort {
 		parts = append(parts, "--allow-abort")
 	}
 	if cmd.AllowError {
 		parts = append(parts, "--allow-error")
-	}
-	if cmd.AllowApproval {
-		parts = append(parts, "--allow-approval")
 	}
 	return strings.Join(parts, " ")
 }
@@ -373,23 +418,14 @@ func parseCommand(input string) (*parsedCommand, error) {
 	switch strings.ToLower(tokens[0]) {
 	case "help", "/help", "!help", "dummybridge":
 		return &parsedCommand{Name: "help"}, nil
-	case "stream-lorem":
-		cmd, err := parseLoremCommand(tokens[1:])
-		return &parsedCommand{Name: "stream-lorem", Lorem: cmd}, err
 	case "stream-tools":
 		cmd, err := parseToolsCommand(tokens[1:])
 		return &parsedCommand{Name: "stream-tools", Tools: cmd}, err
-	case "stream-random":
-		cmd, err := parseRandomCommand(tokens[1:])
-		return &parsedCommand{Name: "stream-random", Random: cmd}, err
-	case "stream-chaos":
-		cmd, err := parseChaosCommand(tokens[1:])
-		return &parsedCommand{Name: "stream-chaos", Chaos: cmd}, err
+	case "stream":
+		cmd, err := parseStreamCommand(tokens[1:])
+		return &parsedCommand{Name: "stream", Random: cmd}, err
 	default:
-		return &parsedCommand{Name: "stream-lorem", Lorem: &loremCommand{
-			Chars:   min(max(len(input)*4, 120), 1200),
-			Options: defaultCommonOptions(),
-		}}, nil
+		return nil, fmt.Errorf("unknown AI demo command %q", tokens[0])
 	}
 }
 
@@ -397,11 +433,9 @@ func helpText() string {
 	return strings.Join([]string{
 		"DummyBridge demo commands:",
 		"help",
-		"stream-lorem <chars> [--reasoning=N] [--steps=N] [--sources=N] [--documents=N] [--files=N] [--meta] [--data=name] [--data-transient=name] [--delay-ms=min:max] [--chunk-chars=min:max] [--seed=N] [--finish=stop|length|tool-calls|content-filter|other] [--abort|--error]",
+		"stream [seconds] [--runs=N] [--profile=balanced|tools|errors|artifacts] [--seed=N] [--chars=N] [--terminal=stop|length|abort|error] [--delay-ms=min:max] [--stagger-ms=min:max] [--actions=N] [--no-approval] [--allow-abort] [--allow-error]",
 		"stream-tools <chars> <tool[#fail|#approval|#deny|#delta|#inputerror|#prelim|#provider]>... [common options]",
-		"stream-random [seconds] [--actions=N] [--profile=balanced|tools|artifacts|terminals] [--seed=N] [--delay-ms=min:max] [--allow-abort] [--allow-error] [--allow-approval]",
-		"stream-chaos [runs] [seconds] [--profile=balanced|tools|artifacts|terminals] [--seed=N] [--stagger-ms=min:max] [--max-actions=N] [--allow-abort] [--allow-error] [--allow-approval]",
-		"Notes: approval-tagged tools emit a separate Matrix approval event with reaction options.",
+		"Notes: stream enables approval requests by default; approval-tagged tools emit a separate Matrix approval event with reaction options.",
 	}, "\n")
 }
 
@@ -417,7 +451,7 @@ func defaultCommonOptions() commonCommandOptions {
 
 func parseLoremCommand(tokens []string) (*loremCommand, error) {
 	if len(tokens) == 0 {
-		return nil, fmt.Errorf("stream-lorem requires a character count")
+		return nil, fmt.Errorf("text stream requires a character count")
 	}
 	count, err := parsePositiveInt(tokens[0], "character count")
 	if err != nil {
@@ -479,8 +513,28 @@ func parseRandomCommand(tokens []string) (*randomCommand, error) {
 		Actions:             20,
 		DelayMin:            350 * time.Millisecond,
 		DelayMax:            1150 * time.Millisecond,
+		Runs:                1,
+		StaggerMin:          150 * time.Millisecond,
+		StaggerMax:          900 * time.Millisecond,
 		sharedStreamOptions: sharedStreamOptions{Profile: "balanced"},
 	}
+	return parseStreamLikeCommand(tokens, cmd, false)
+}
+
+func parseStreamCommand(tokens []string) (*randomCommand, error) {
+	cmd := &randomCommand{
+		Duration:            20 * time.Second,
+		DelayMin:            350 * time.Millisecond,
+		DelayMax:            1150 * time.Millisecond,
+		Runs:                1,
+		StaggerMin:          150 * time.Millisecond,
+		StaggerMax:          900 * time.Millisecond,
+		sharedStreamOptions: sharedStreamOptions{Profile: "balanced", AllowApproval: true},
+	}
+	return parseStreamLikeCommand(tokens, cmd, true)
+}
+
+func parseStreamLikeCommand(tokens []string, cmd *randomCommand, deriveActions bool) (*randomCommand, error) {
 	rest := tokens
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "--") {
 		seconds, err := parsePositiveInt(rest[0], "duration")
@@ -493,6 +547,9 @@ func parseRandomCommand(tokens []string) (*randomCommand, error) {
 		cmd.Duration = time.Duration(seconds) * time.Second
 		rest = rest[1:]
 	}
+	if deriveActions && cmd.Actions == 0 {
+		cmd.Actions = max(3, min(maxDemoRandomActions, int(cmd.Duration/time.Second)*2))
+	}
 	for _, token := range rest {
 		key, value, hasValue := parseOptionToken(token)
 		switch key {
@@ -502,19 +559,53 @@ func parseRandomCommand(tokens []string) (*randomCommand, error) {
 				return nil, err
 			}
 			cmd.Actions = n
+		case "chars":
+			n, err := parseValidatedInt(value, hasValue, token, "character count", maxDemoChars, false)
+			if err != nil {
+				return nil, err
+			}
+			cmd.Chars = n
 		case "delay-ms":
 			minDelay, maxDelay, err := parseDurationRangeMS(value, hasValue, token)
 			if err != nil {
 				return nil, err
 			}
 			cmd.DelayMin, cmd.DelayMax = minDelay, maxDelay
+		case "terminal":
+			if !hasValue {
+				return nil, fmt.Errorf("%s requires a value", token)
+			}
+			switch strings.ToLower(value) {
+			case "stop", "finish":
+				cmd.Terminal = "finish"
+			case "abort", "error":
+				cmd.Terminal = strings.ToLower(value)
+			case "length", "tool-calls", "content-filter", "other":
+				cmd.Terminal = agui.NormalizeFinishReason(value)
+			default:
+				return nil, fmt.Errorf("unknown terminal %q", value)
+			}
+		case "runs":
+			n, err := parseValidatedInt(value, hasValue, token, "run count", maxDemoChaosRuns, false)
+			if err != nil {
+				return nil, err
+			}
+			cmd.Runs = n
+		case "stagger-ms":
+			minDelay, maxDelay, err := parseDurationRange(value, hasValue, token, "stagger-ms", maxDemoStagger)
+			if err != nil {
+				return nil, err
+			}
+			cmd.StaggerMin, cmd.StaggerMax = minDelay, maxDelay
+		case "no-approval":
+			cmd.AllowApproval = false
 		default:
 			handled, err := parseSharedStreamOption(key, value, hasValue, token, &cmd.sharedStreamOptions)
 			if err != nil || !handled {
 				if err != nil {
 					return nil, err
 				}
-				return nil, fmt.Errorf("unknown random option %q", token)
+				return nil, fmt.Errorf("unknown stream option %q", token)
 			}
 		}
 	}
@@ -678,7 +769,7 @@ func parseSharedStreamOption(key, value string, hasValue bool, token string, opt
 			return false, fmt.Errorf("%s requires a value", token)
 		}
 		switch strings.ToLower(value) {
-		case "balanced", "tools", "artifacts", "terminals":
+		case "balanced", "tools", "errors", "artifacts":
 			opts.Profile = strings.ToLower(value)
 		default:
 			return false, fmt.Errorf("unknown profile %q", value)
@@ -696,8 +787,6 @@ func parseSharedStreamOption(key, value string, hasValue bool, token string, opt
 		opts.AllowAbort = true
 	case "allow-error":
 		opts.AllowError = true
-	case "allow-approval":
-		opts.AllowApproval = true
 	default:
 		return false, nil
 	}
@@ -818,6 +907,15 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 	stepOpen := false
 	stepName := ""
 	actionOptions, actionWeightTotal := buildRandomActionOptions(cmd)
+	if cmd.Chars > 0 {
+		text := buildDemoVisibleText(cmd.Chars, rand.New(rand.NewSource(rng.Int63())))
+		for _, chunk := range chunkText(text, rng, defaultChunkMin, defaultChunkMax) {
+			w.Text(chunk)
+			if err := r.runtime.sleep(ctx, r.sampleDelay(rng, cmd.DelayMin, cmd.DelayMax)); err != nil {
+				return err
+			}
+		}
+	}
 	handleTool := func(spec toolSpec) error {
 		if err := r.runToolSpec(ctx, w, spec, rng, defaultCommonOptions()); err != nil {
 			if errors.Is(err, errApprovalRequested) && stepOpen {
@@ -885,7 +983,7 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 		case randomActionFile:
 			w.Custom("com.beeper.file", map[string]any{"url": fmt.Sprintf("mxc://dummybridge/random-file-%d", action+1), "mediaType": "application/octet-stream"})
 		case randomActionMetadata:
-			w.StateDelta(statePatch(map[string]any{"command": "stream-random", "seed": seed, "action": action + 1, "profile": cmd.Profile}))
+			w.StateDelta(statePatch(map[string]any{"command": "stream", "seed": seed, "action": action + 1, "profile": cmd.Profile}))
 		case randomActionData:
 			w.Custom("com.beeper.data", map[string]any{"name": "random", "value": map[string]any{"action": action + 1, "seed": seed}})
 		case randomActionDataTransient:
@@ -895,11 +993,14 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 	if stepOpen {
 		w.StepFinish(stepName)
 	}
-	switch chooseRandomTerminal(cmd, rng) {
+	terminal := chooseRandomTerminal(cmd, rng)
+	switch terminal {
 	case "abort":
 		w.Abort("DummyBridge random mode aborted")
 	case "error":
 		w.Error("DummyBridge random mode failed")
+	case agui.FinishReasonLength, agui.FinishReasonToolCalls, agui.FinishReasonContentFilter, agui.FinishReasonOther:
+		w.Finish(terminal)
 	default:
 		w.Finish(agui.FinishReasonStop)
 	}
@@ -1092,82 +1193,6 @@ func statePatch(values map[string]any) []map[string]any {
 		})
 	}
 	return patch
-}
-
-func buildRandomActionOptions(cmd randomCommand) ([]randomActionOption, int) {
-	options := []randomActionOption{
-		{randomActionText, 6},
-		{randomActionThinking, 4},
-		{randomActionStep, 2},
-		{randomActionTool, 3},
-		{randomActionToolFail, 2},
-		{randomActionSource, 2},
-		{randomActionDocument, 2},
-		{randomActionFile, 2},
-		{randomActionMetadata, 2},
-		{randomActionData, 1},
-		{randomActionDataTransient, 1},
-	}
-	if cmd.AllowApproval {
-		options = append(options, randomActionOption{randomActionToolApproval, 2})
-	}
-	switch cmd.Profile {
-	case "tools":
-		options = append(options,
-			randomActionOption{randomActionTool, 6},
-			randomActionOption{randomActionToolFail, 4},
-			randomActionOption{randomActionToolDeny, 3},
-		)
-		if cmd.AllowApproval {
-			options = append(options, randomActionOption{randomActionToolApproval, 4})
-		}
-	case "artifacts":
-		options = append(options,
-			randomActionOption{randomActionSource, 4},
-			randomActionOption{randomActionDocument, 4},
-			randomActionOption{randomActionFile, 4},
-			randomActionOption{randomActionMetadata, 3},
-			randomActionOption{randomActionData, 3},
-			randomActionOption{randomActionDataTransient, 3},
-		)
-	case "terminals":
-		options = append(options, randomActionOption{randomActionStep, 5})
-	}
-	total := 0
-	for _, option := range options {
-		total += option.weight
-	}
-	return options, total
-}
-
-func pickWeighted(options []randomActionOption, total int, rng *rand.Rand) string {
-	if total <= 0 || len(options) == 0 {
-		return randomActionText
-	}
-	pick := rng.Intn(total)
-	for _, option := range options {
-		if pick < option.weight {
-			return option.name
-		}
-		pick -= option.weight
-	}
-	return randomActionText
-}
-
-func chooseRandomTerminal(cmd randomCommand, rng *rand.Rand) string {
-	options := []string{"finish"}
-	if cmd.AllowAbort {
-		options = append(options, "abort")
-	}
-	if cmd.AllowError {
-		options = append(options, "error")
-	}
-	return options[rng.Intn(len(options))]
-}
-
-func randomToolName(rng *rand.Rand) string {
-	names := []string{"search", "fetch", "summarize", "calendar", "shell", "files", "preview"}
-	return names[rng.Intn(len(names))]
 }
 
 func (r aiRunner) sampleDelay(rng *rand.Rand, minDelay, maxDelay time.Duration) time.Duration {

@@ -34,20 +34,21 @@ type ReactionEvent struct {
 }
 
 type ApprovalContext struct {
-	ID               string `json:"id"`
-	ThreadID         string `json:"threadId"`
-	RunID            string `json:"runId"`
-	MessageID        string `json:"messageId"`
-	Command          string `json:"command"`
-	ToolCallID       string `json:"toolCallId"`
-	ToolName         string `json:"toolName"`
-	TargetEvent      string `json:"target_event"`
-	AgentID          string `json:"agentId,omitempty"`
-	AgentName        string `json:"agentName,omitempty"`
-	Model            string `json:"model,omitempty"`
-	SeqStart         int    `json:"seqStart,omitempty"`
-	PreviewText      string `json:"previewText,omitempty"`
-	PreviewTruncated bool   `json:"previewTruncated,omitempty"`
+	ID               string                      `json:"id"`
+	ThreadID         string                      `json:"threadId"`
+	RunID            string                      `json:"runId"`
+	MessageID        string                      `json:"messageId"`
+	Command          string                      `json:"command"`
+	ToolCallID       string                      `json:"toolCallId"`
+	ToolName         string                      `json:"toolName"`
+	TargetEvent      string                      `json:"target_event"`
+	AgentID          string                      `json:"agentId,omitempty"`
+	AgentName        string                      `json:"agentName,omitempty"`
+	Model            string                      `json:"model,omitempty"`
+	SeqStart         int                         `json:"seqStart,omitempty"`
+	PriorApprovals   []agui.ToolApprovalResponse `json:"priorApprovals,omitempty"`
+	PreviewText      string                      `json:"previewText,omitempty"`
+	PreviewTruncated bool                        `json:"previewTruncated,omitempty"`
 }
 
 // ApprovalSeqReservation is the size of the sequence-number window reserved

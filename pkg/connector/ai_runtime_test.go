@@ -35,10 +35,9 @@ func TestParseCommandRejectsConflictingToolTags(t *testing.T) {
 
 func TestParseCommandRejectsInvalidProfilesAndOversizedOptions(t *testing.T) {
 	tests := []string{
-		"stream-random --profile=unknown",
-		"stream-lorem 100 --abort --error",
-		"stream-lorem 100 --finish=length --abort",
-		"stream-lorem 1000000",
+		"stream --profile=unknown",
+		"stream --terminal=unknown",
+		"stream --chars=1000000",
 		"stream-tools 100 shell --chunk-chars=1:9999",
 	}
 	for _, input := range tests {
@@ -51,12 +50,10 @@ func TestParseCommandRejectsInvalidProfilesAndOversizedOptions(t *testing.T) {
 func TestHelpTextMentionsCommandsOptionsAndToolTags(t *testing.T) {
 	guide := helpText()
 	for _, expected := range []string{
-		"stream-lorem",
 		"stream-tools",
-		"stream-random",
-		"stream-chaos",
-		"--data-transient",
-		"--allow-approval",
+		"stream",
+		"--profile=balanced|tools|errors|artifacts",
+		"--no-approval",
 		"#provider",
 		"#inputerror",
 	} {
@@ -67,7 +64,7 @@ func TestHelpTextMentionsCommandsOptionsAndToolTags(t *testing.T) {
 }
 
 func TestBuildAIRunLoremIncludesArtifactsStateAndMetadata(t *testing.T) {
-	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream-lorem 400 --reasoning=80 --steps=2 --sources=1 --documents=1 --files=1 --meta --data=demo --data-transient=temp --seed=7 --chunk-chars=32:32", time.Unix(10, 0))
+	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream-tools 400 search --reasoning=80 --steps=2 --sources=1 --documents=1 --files=1 --meta --data=demo --data-transient=temp --seed=7 --chunk-chars=32:32", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,14 +576,14 @@ func TestBuildAIRunToolsProviderTagAddsRawEventPassthrough(t *testing.T) {
 }
 
 func TestBuildAIRunTerminalErrorAndAbortStates(t *testing.T) {
-	errorRun, err := buildAIRun(context.Background(), "run-error", "thread-1", "stream-lorem 80 --error --seed=7", time.Unix(10, 0))
+	errorRun, err := buildAIRun(context.Background(), "run-error", "thread-1", "stream 1 --terminal=error --seed=7", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if errorRun.Status.State != "error" {
 		t.Fatalf("expected error status, got %#v", errorRun.Status)
 	}
-	abortRun, err := buildAIRun(context.Background(), "run-abort", "thread-1", "stream-lorem 80 --abort --seed=7", time.Unix(10, 0))
+	abortRun, err := buildAIRun(context.Background(), "run-abort", "thread-1", "stream 1 --terminal=abort --seed=7", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +593,7 @@ func TestBuildAIRunTerminalErrorAndAbortStates(t *testing.T) {
 }
 
 func TestBuildAIRunOver64KBPacksTo58KCarriers(t *testing.T) {
-	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream-lorem 70000 --seed=7 --chunk-chars=512:512", time.Unix(10, 0))
+	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream 1 --chars=70000 --actions=1 --seed=7", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +629,7 @@ func TestBuildAIRunOver64KBPacksTo58KCarriers(t *testing.T) {
 }
 
 func TestBuildAIRunPlansChaosCreatesMultipleRuns(t *testing.T) {
-	plans, err := buildAIRunPlans(context.Background(), "run-chaos", "thread-1", "stream-chaos 3 1 --max-actions=3 --seed=7 --stagger-ms=1:1", time.Unix(10, 0), "ai", "AI")
+	plans, err := buildAIRunPlans(context.Background(), "run-chaos", "thread-1", "stream 1 --runs=3 --actions=3 --seed=7 --stagger-ms=1:1", time.Unix(10, 0), "ai", "AI")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +655,7 @@ func TestBuildAIRunPlansChaosCreatesMultipleRuns(t *testing.T) {
 }
 
 func TestBuildAIRunRandomHonorsVirtualDelays(t *testing.T) {
-	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream-random 3 --actions=4 --seed=7 --delay-ms=100:100", time.Unix(10, 0))
+	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream 3 --actions=4 --seed=7 --delay-ms=100:100", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +682,7 @@ func TestBuildAIRunRandomHonorsVirtualDelays(t *testing.T) {
 
 func TestRandomModeApprovalPause(t *testing.T) {
 	for seed := int64(1); seed <= 200; seed++ {
-		run, err := buildAIRun(context.Background(), "run-approval", "thread-approval", "stream-random 1 --profile=tools --allow-approval --seed="+strconv.FormatInt(seed, 10), time.Unix(10, 0))
+		run, err := buildAIRun(context.Background(), "run-approval", "thread-approval", "stream 1 --profile=tools --seed="+strconv.FormatInt(seed, 10), time.Unix(10, 0))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -801,6 +798,37 @@ func TestMultiApprovalContinuationKeepsLaterPrompts(t *testing.T) {
 	if run.Status.State != "streaming" {
 		t.Fatalf("expected continuation with pending approval to remain streaming, got %#v", run.Status)
 	}
+
+	secondCtx := aistream.ApprovalContext{
+		ID:          run.Prompts[0].ID,
+		ThreadID:    approvalCtx.ThreadID,
+		RunID:       approvalCtx.RunID,
+		MessageID:   approvalCtx.MessageID,
+		Command:     command,
+		ToolCallID:  run.Prompts[0].ToolCallID,
+		ToolName:    run.Prompts[0].ToolName,
+		TargetEvent: approvalCtx.TargetEvent,
+		AgentID:     approvalCtx.AgentID,
+		AgentName:   approvalCtx.AgentName,
+		SeqStart:    100,
+		PriorApprovals: []agui.ToolApprovalResponse{{
+			ID:       approvalCtx.ID,
+			Approved: true,
+		}},
+	}
+	finished, err := buildAIApprovalContinuationRun(context.Background(), secondCtx, agui.ToolApprovalResponse{
+		ID:       secondCtx.ID,
+		Approved: true,
+	}, time.Unix(30, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished.Status.State != "complete" {
+		t.Fatalf("second approval continuation should finish, got %#v", finished.Status)
+	}
+	if len(finished.Prompts) != 0 {
+		t.Fatalf("finished continuation should not keep prompts: %#v", finished.Prompts)
+	}
 }
 
 func TestApprovalContinuationReplaysRandomRunWithImplicitSeed(t *testing.T) {
@@ -810,7 +838,7 @@ func TestApprovalContinuationReplaysRandomRunWithImplicitSeed(t *testing.T) {
 	// seed and lose the original toolCallID.
 	for tick := int64(1); tick <= 500; tick++ {
 		now := time.Unix(tick, 0)
-		plans, err := buildAIRunPlans(context.Background(), "run-rand", "thread-rand", "stream-random 1 --profile=tools --allow-approval", now, "ai", "AI")
+		plans, err := buildAIRunPlans(context.Background(), "run-rand", "thread-rand", "stream 1 --profile=tools", now, "ai", "AI")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -855,7 +883,7 @@ func TestApprovalContinuationReplaysRandomRunWithImplicitSeed(t *testing.T) {
 }
 
 func TestChaosSubRunCommandIsParseable(t *testing.T) {
-	plans, err := buildAIRunPlans(context.Background(), "run-chaos", "thread-chaos", "stream-chaos 2 1 --allow-approval --seed=11", time.Unix(0, 0), "ai", "AI")
+	plans, err := buildAIRunPlans(context.Background(), "run-chaos", "thread-chaos", "stream 1 --runs=2 --seed=11", time.Unix(0, 0), "ai", "AI")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,8 +891,8 @@ func TestChaosSubRunCommandIsParseable(t *testing.T) {
 		t.Fatalf("expected two chaos sub-runs, got %d", len(plans))
 	}
 	for i, plan := range plans {
-		if !strings.HasPrefix(plan.EffectiveCommand, "stream-random ") {
-			t.Fatalf("chaos plan %d must render as stream-random, got %q", i, plan.EffectiveCommand)
+		if !strings.HasPrefix(plan.EffectiveCommand, "stream ") {
+			t.Fatalf("chaos plan %d must render as stream, got %q", i, plan.EffectiveCommand)
 		}
 		if !strings.Contains(plan.EffectiveCommand, "--seed=") {
 			t.Fatalf("chaos sub-run command must include explicit seed: %q", plan.EffectiveCommand)
