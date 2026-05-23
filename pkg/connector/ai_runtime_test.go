@@ -811,14 +811,16 @@ func TestMultiApprovalContinuationKeepsLaterPrompts(t *testing.T) {
 		AgentID:     approvalCtx.AgentID,
 		AgentName:   approvalCtx.AgentName,
 		SeqStart:    100,
-		PriorApprovals: []agui.ToolApprovalResponse{{
+	}
+	finished, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), secondCtx, map[string]agui.ToolApprovalResponse{
+		approvalCtx.ID: {
 			ID:       approvalCtx.ID,
 			Approved: true,
-		}},
-	}
-	finished, err := buildAIApprovalContinuationRun(context.Background(), secondCtx, agui.ToolApprovalResponse{
-		ID:       secondCtx.ID,
-		Approved: true,
+		},
+		secondCtx.ID: {
+			ID:       secondCtx.ID,
+			Approved: true,
+		},
 	}, time.Unix(30, 0))
 	if err != nil {
 		t.Fatal(err)

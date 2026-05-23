@@ -230,3 +230,17 @@ func TestAnnotateApprovalEventIDsAddsReactionTargetEventToStreamPrompt(t *testin
 	}
 	t.Fatal("missing approval-requested event")
 }
+
+func TestApprovalDecisionsAreStoredInRunSession(t *testing.T) {
+	client := &DummyClient{}
+	first := agui.ToolApprovalResponse{ID: "approval-1", Approved: true}
+	decisions := client.recordAIApprovalDecision("run-1", first)
+	if len(decisions) != 1 || !decisions["approval-1"].Approved {
+		t.Fatalf("bad first decisions: %#v", decisions)
+	}
+	second := agui.ToolApprovalResponse{ID: "approval-2", Approved: false, Reason: "denied"}
+	decisions = client.recordAIApprovalDecision("run-1", second)
+	if len(decisions) != 2 || !decisions["approval-1"].Approved || decisions["approval-2"].Reason != "denied" {
+		t.Fatalf("bad accumulated decisions: %#v", decisions)
+	}
+}

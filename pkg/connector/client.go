@@ -37,6 +37,12 @@ type DummyClient struct {
 
 	approvalSelectionsOnce sync.Once
 	approvalSelections     *exsync.Map[string, string]
+	aiRunSessionsMu        sync.Mutex
+	aiRunSessions          map[string]*aiRunSession
+}
+
+type aiRunSession struct {
+	Decisions map[string]agui.ToolApprovalResponse
 }
 
 var _ bridgev2.NetworkAPI = (*DummyClient)(nil)
@@ -625,6 +631,7 @@ func (dc *DummyClient) queueAIRunStreamAndMetadata(portal *bridgev2.Portal, send
 // known, and finally emits the carriers and (if the run terminated) the
 // final metadata edit.
 func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid.UserID, messageID networkid.MessageID, targetEventID id.EventID, run aistream.Run, command string, startSeq int, anchorAt time.Time) {
+	dc.ensureAIRunSession(run.RunID)
 	carriers, err := aistream.PackRunFromSeq(run, string(targetEventID), aistream.CarrierBudgetBytes, startSeq)
 	if err != nil {
 		log.Warn().Err(err).Str("run_id", run.RunID).Msg("Failed to pack AI stream")
@@ -846,7 +853,6 @@ func (dc *DummyClient) queueAIApprovalPrompt(portal *bridgev2.Portal, sender net
 		AgentName:        run.AgentName,
 		Model:            run.Model,
 		SeqStart:         prompt.SeqStart,
-		PriorApprovals:   approvalResponsesBeforePrompt(run.Events, prompt.ID),
 		PreviewText:      run.Preview.Text,
 		PreviewTruncated: run.Preview.Truncated,
 	}
@@ -890,7 +896,8 @@ func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *brid
 		response.ID = approvalCtx.ID
 	}
 	now := time.Now()
-	run, err := buildAIApprovalContinuationRun(ctx, approvalCtx, response, now)
+	approvals := dc.recordAIApprovalDecision(approvalCtx.RunID, response)
+	run, err := buildAIApprovalContinuationRunWithApprovals(ctx, approvalCtx, approvals, now)
 	if err != nil {
 		log.Warn().Err(err).Str("approval_id", approvalCtx.ID).Msg("Failed to build AI approval continuation")
 		return
@@ -919,20 +926,19 @@ func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *brid
 }
 
 func buildAIApprovalContinuationRun(ctx context.Context, approvalCtx aistream.ApprovalContext, response agui.ToolApprovalResponse, now time.Time) (aistream.Run, error) {
+	if response.ID == "" {
+		response.ID = approvalCtx.ID
+	}
+	return buildAIApprovalContinuationRunWithApprovals(ctx, approvalCtx, map[string]agui.ToolApprovalResponse{
+		response.ID: response,
+	}, now)
+}
+
+func buildAIApprovalContinuationRunWithApprovals(ctx context.Context, approvalCtx aistream.ApprovalContext, approvals map[string]agui.ToolApprovalResponse, now time.Time) (aistream.Run, error) {
 	cmd, err := parseCommand(approvalCtx.Command)
 	if err != nil {
 		return aistream.Run{}, err
 	}
-	if response.ID == "" {
-		response.ID = approvalCtx.ID
-	}
-	approvals := make(map[string]agui.ToolApprovalResponse, len(approvalCtx.PriorApprovals)+1)
-	for _, prior := range approvalCtx.PriorApprovals {
-		if prior.ID != "" {
-			approvals[prior.ID] = prior
-		}
-	}
-	approvals[approvalCtx.ID] = response
 	run, err := buildAIRunFromCommandWithApprovals(ctx, approvalCtx.RunID, approvalCtx.ThreadID, now, cmd, approvalCtx.AgentID, approvalCtx.AgentName, approvals)
 	if err != nil {
 		return aistream.Run{}, err
@@ -956,75 +962,6 @@ func buildAIApprovalContinuationRun(ctx context.Context, approvalCtx aistream.Ap
 	// and must not be queued again.
 	run.Prompts = filterPendingPrompts(run.Prompts, approvalCtx.ID, run.Events)
 	return *run, nil
-}
-
-func approvalResponsesBeforePrompt(events []agui.Event, promptID string) []agui.ToolApprovalResponse {
-	if promptID == "" {
-		return nil
-	}
-	var responses []agui.ToolApprovalResponse
-	for _, evt := range events {
-		if evt["type"] != agui.EventCustom {
-			continue
-		}
-		name, _ := evt["name"].(string)
-		value, _ := evt["value"].(map[string]any)
-		if value == nil {
-			continue
-		}
-		if name == agui.ApprovalCustomRequested && aistream.ApprovalIDFromRequestedValue(value) == promptID {
-			return responses
-		}
-		if name != agui.ApprovalCustomResponded {
-			continue
-		}
-		if response, ok := approvalResponseFromAny(value["approval"]); ok && response.ID != "" {
-			responses = append(responses, response)
-		}
-	}
-	return responses
-}
-
-func approvalResponseFromAny(value any) (agui.ToolApprovalResponse, bool) {
-	switch typed := value.(type) {
-	case agui.ToolApprovalResponse:
-		return typed, typed.ID != ""
-	case *agui.ToolApprovalResponse:
-		if typed == nil {
-			return agui.ToolApprovalResponse{}, false
-		}
-		return *typed, typed.ID != ""
-	case map[string]any:
-		return approvalResponseFromMap(typed)
-	default:
-		raw, err := json.Marshal(value)
-		if err != nil {
-			return agui.ToolApprovalResponse{}, false
-		}
-		var response agui.ToolApprovalResponse
-		if err = json.Unmarshal(raw, &response); err != nil {
-			return agui.ToolApprovalResponse{}, false
-		}
-		return response, response.ID != ""
-	}
-}
-
-func approvalResponseFromMap(value map[string]any) (agui.ToolApprovalResponse, bool) {
-	idValue, _ := value["id"].(string)
-	if idValue == "" {
-		return agui.ToolApprovalResponse{}, false
-	}
-	response := agui.ToolApprovalResponse{ID: idValue}
-	if approved, ok := value["approved"].(bool); ok {
-		response.Approved = approved
-	}
-	if always, ok := value["always"].(bool); ok {
-		response.Always = always
-	}
-	if reason, ok := value["reason"].(string); ok {
-		response.Reason = reason
-	}
-	return response, true
 }
 
 func filterPendingPrompts(prompts []aistream.ApprovalPrompt, resolvedID string, events []agui.Event) []aistream.ApprovalPrompt {
@@ -1174,6 +1111,46 @@ func validApprovalContext(ctx aistream.ApprovalContext) (aistream.ApprovalContex
 
 func (dc *DummyClient) queueAIRunFinalMetadata(portal *bridgev2.Portal, sender networkid.UserID, messageID networkid.MessageID, run aistream.Run) {
 	dc.UserLogin.QueueRemoteEvent(aibridgev2.FinalMetadataEdit(portal.PortalKey, sender, messageID, run, time.Now()))
+}
+
+func (dc *DummyClient) ensureAIRunSession(runID string) {
+	if dc == nil || runID == "" {
+		return
+	}
+	dc.aiRunSessionsMu.Lock()
+	defer dc.aiRunSessionsMu.Unlock()
+	if dc.aiRunSessions == nil {
+		dc.aiRunSessions = make(map[string]*aiRunSession)
+	}
+	if dc.aiRunSessions[runID] == nil {
+		dc.aiRunSessions[runID] = &aiRunSession{Decisions: make(map[string]agui.ToolApprovalResponse)}
+	}
+}
+
+func (dc *DummyClient) recordAIApprovalDecision(runID string, response agui.ToolApprovalResponse) map[string]agui.ToolApprovalResponse {
+	decisions := make(map[string]agui.ToolApprovalResponse)
+	if response.ID == "" {
+		return decisions
+	}
+	if dc == nil || runID == "" {
+		decisions[response.ID] = response
+		return decisions
+	}
+	dc.aiRunSessionsMu.Lock()
+	defer dc.aiRunSessionsMu.Unlock()
+	if dc.aiRunSessions == nil {
+		dc.aiRunSessions = make(map[string]*aiRunSession)
+	}
+	session := dc.aiRunSessions[runID]
+	if session == nil {
+		session = &aiRunSession{Decisions: make(map[string]agui.ToolApprovalResponse)}
+		dc.aiRunSessions[runID] = session
+	}
+	session.Decisions[response.ID] = response
+	for id, decision := range session.Decisions {
+		decisions[id] = decision
+	}
+	return decisions
 }
 
 func (dc *DummyClient) HandleMatrixDeleteChat(ctx context.Context, msg *bridgev2.MatrixDeleteChat) error {
