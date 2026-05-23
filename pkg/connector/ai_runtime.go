@@ -16,7 +16,10 @@ import (
 	"go.mau.fi/util/shlex"
 )
 
-var errApprovalRequested = errors.New("approval requested")
+var (
+	errApprovalRequested = errors.New("approval requested")
+	errApprovalDenied    = errors.New("approval denied")
+)
 
 const (
 	defaultChunkMin       = 24
@@ -139,6 +142,11 @@ type aiRuntime struct {
 	sleep func(context.Context, time.Duration) error
 }
 
+type aiRunner struct {
+	runtime   aiRuntime
+	approvals map[string]agui.ToolApprovalResponse
+}
+
 type aiRunPlan struct {
 	Run   *aistream.Run
 	Delay time.Duration
@@ -194,12 +202,16 @@ func buildAIRunPlans(ctx context.Context, runID, threadID, input string, now tim
 }
 
 func buildAIRunFromCommand(ctx context.Context, runID, threadID string, now time.Time, cmd *parsedCommand, agentID, agentName string) (*aistream.Run, error) {
+	return buildAIRunFromCommandWithApprovals(ctx, runID, threadID, now, cmd, agentID, agentName, nil)
+}
+
+func buildAIRunFromCommandWithApprovals(ctx context.Context, runID, threadID string, now time.Time, cmd *parsedCommand, agentID, agentName string, approvals map[string]agui.ToolApprovalResponse) (*aistream.Run, error) {
 	runtime := virtualAIRuntime(now)
 	run := aistream.NewRun(runID, threadID, aistream.DefaultModel, agentID, agentName, now)
 	writer := aistream.NewWriter(run, runtime.now)
 	writer.Start()
 
-	runner := aiRunner{runtime: runtime}
+	runner := aiRunner{runtime: runtime, approvals: approvals}
 	var err error
 	switch {
 	case cmd == nil || cmd.Name == "help":
@@ -649,10 +661,6 @@ func parseToolSpec(raw string, idx int) (toolSpec, error) {
 	return spec, nil
 }
 
-type aiRunner struct {
-	runtime aiRuntime
-}
-
 func (r aiRunner) runLorem(ctx context.Context, w *aistream.Writer, cmd loremCommand) error {
 	opts := cmd.Options
 	rng := rngForOptions(opts.SeedSet, opts.Seed, r.runtime.now().UnixNano())
@@ -848,6 +856,17 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 	}
 	switch {
 	case spec.Approval:
+		if response, ok := r.approvals[approvalID]; ok {
+			if response.ID == "" {
+				response.ID = approvalID
+			}
+			w.ToolApprovalResponded(toolCallID, spec.Name, input, response)
+			annotateProviderRawEvent(w, spec, "approval_responded")
+			if !response.Approved {
+				return errApprovalDenied
+			}
+			return nil
+		}
 		w.ToolApprovalInputComplete(toolCallID, spec.Name, input)
 		annotateProviderRawEvent(w, spec, "tool_call_input_complete")
 		w.ToolApprovalRequested(toolCallID, spec.Name, input, *approval)

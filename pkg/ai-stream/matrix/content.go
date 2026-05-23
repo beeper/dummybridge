@@ -3,14 +3,39 @@ package matrix
 import (
 	"fmt"
 
-	"github.com/beeper/dummybridge/pkg/ag-ui"
 	"github.com/beeper/dummybridge/pkg/ai-stream"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
 )
 
+const ApprovalRelationType = event.RelationType("com.beeper.ai.approval")
+
 func AnchorContent(run aistream.Run) (*event.MessageEventContent, map[string]any) {
+	content := previewContent(run)
+	extra := map[string]any{
+		aistream.BeeperAIKey:         run.InitialUIMessage(),
+		aistream.BeeperAIMetadataKey: run.Metadata(),
+		"com.beeper.stream": map[string]any{
+			"type": aistream.BeeperAIStreamDeltas,
+		},
+	}
+	return content, extra
+}
+
+func FinalContent(run aistream.Run) (*event.MessageEventContent, map[string]any) {
+	content := previewContent(run)
+	extra := map[string]any{
+		aistream.BeeperAIKey:         run.FinalUIMessage(aistream.SnapshotTextBytes, true),
+		aistream.BeeperAIMetadataKey: run.Metadata(),
+		"com.beeper.stream": map[string]any{
+			"type": aistream.BeeperAIStreamDeltas,
+		},
+	}
+	return content, extra
+}
+
+func previewContent(run aistream.Run) *event.MessageEventContent {
 	body := run.Preview.Text
 	if body == "" {
 		body = "..."
@@ -22,14 +47,7 @@ func AnchorContent(run aistream.Run) (*event.MessageEventContent, map[string]any
 		ID:          run.AgentID,
 		Displayname: run.AgentName,
 	}
-	extra := map[string]any{
-		aistream.BeeperAIKey:         run.InitialUIMessage(),
-		aistream.BeeperAIMetadataKey: run.Metadata(),
-		"com.beeper.stream": map[string]any{
-			"type": aistream.BeeperAIStreamDeltas,
-		},
-	}
-	return content, extra
+	return content
 }
 
 func CarrierContent(carrier aistream.Carrier, targetEventID id.EventID) (*event.MessageEventContent, map[string]any) {
@@ -38,43 +56,22 @@ func CarrierContent(carrier aistream.Carrier, targetEventID id.EventID) (*event.
 	return &content, aistream.CarrierContent(carrier.Envelopes)
 }
 
-func ApprovalContent(ctx aistream.ApprovalContext, options []aistream.ReactionOption[agui.ToolApprovalResponse]) (*event.MessageEventContent, map[string]any) {
+func ApprovalContent(ctx aistream.ApprovalContext, choices []aistream.ApprovalChoice) (*event.MessageEventContent, map[string]any) {
 	toolName := ctx.ToolName
 	body := fmt.Sprintf("Approval required for %s", toolName)
-	if len(options) > 0 {
-		body += "\nReact with one of the listed options."
+	if len(choices) > 0 {
+		body += "\nReact with one of the listed choices."
 	}
 	content := format.TextToContent(body)
 	if ctx.TargetEvent != "" {
-		content.SetRelatesTo(&event.RelatesTo{Type: event.RelReference, EventID: id.EventID(ctx.TargetEvent)})
+		content.SetRelatesTo(&event.RelatesTo{Type: ApprovalRelationType, EventID: id.EventID(ctx.TargetEvent)})
 	}
 	extra := map[string]any{
-		"com.beeper.ai.approval": map[string]any{
-			"id":         ctx.ID,
-			"toolCallId": ctx.ToolCallID,
-			"toolName":   toolName,
-			"threadId":   ctx.ThreadID,
-			"runId":      ctx.RunID,
-			"messageId":  ctx.MessageID,
-			"approval": agui.ToolApproval{
-				ID:            ctx.ID,
-				NeedsApproval: true,
-			},
-			"reactions": ReactionOptionsAsAny(options),
-		},
+		"com.beeper.ai.approval": aistream.NewApprovalNotice(ctx, choices).Map(),
 	}
 	return &content, extra
 }
 
-func ReactionOptionsAsAny(options []aistream.ReactionOption[agui.ToolApprovalResponse]) []any {
-	out := make([]any, 0, len(options))
-	for _, option := range options {
-		out = append(out, map[string]any{
-			"id":     option.ID,
-			"label":  option.Label,
-			"values": option.Values,
-			"value":  option.Value,
-		})
-	}
-	return out
+func ApprovalChoicesAsAny(choices []aistream.ApprovalChoice) []any {
+	return aistream.ApprovalChoicesAsAny(choices)
 }

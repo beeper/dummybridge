@@ -53,7 +53,7 @@ func Carrier(portalKey networkid.PortalKey, sender networkid.UserID, run aistrea
 }
 
 func ApprovalPrompt(portalKey networkid.PortalKey, sender networkid.UserID, ctx aistream.ApprovalContext, timestamp time.Time) *simplevent.PreConvertedMessage {
-	content, extra := aimatrix.ApprovalContent(ctx, aistream.DefaultApprovalOptions(ctx.ID))
+	content, extra := aimatrix.ApprovalContent(ctx, aistream.DefaultApprovalChoices())
 	return &simplevent.PreConvertedMessage{
 		EventMeta: eventMeta(bridgev2.RemoteEventMessage, portalKey, sender, timestamp),
 		Data: &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{
@@ -63,29 +63,24 @@ func ApprovalPrompt(portalKey networkid.PortalKey, sender networkid.UserID, ctx 
 	}
 }
 
-func ApprovalOptionReaction[T any](portalKey networkid.PortalKey, sender networkid.UserID, ctx aistream.ApprovalContext, option aistream.ReactionOption[T], timestamp time.Time) *simplevent.Reaction {
-	emoji := option.ID
-	if len(option.Values) > 0 {
-		emoji = option.Values[0]
-	}
+func ApprovalOptionReaction(portalKey networkid.PortalKey, sender networkid.UserID, ctx aistream.ApprovalContext, choice aistream.ApprovalChoice, timestamp time.Time) *simplevent.Reaction {
 	return &simplevent.Reaction{
 		EventMeta:     eventMeta(bridgev2.RemoteEventReaction, portalKey, sender, timestamp),
 		TargetMessage: networkid.MessageID(ctx.ID),
-		EmojiID:       networkid.EmojiID(option.ID),
-		Emoji:         emoji,
+		EmojiID:       networkid.EmojiID(choice.Key),
+		Emoji:         choice.Alias,
 		ExtraContent: map[string]any{
 			"com.beeper.ai.approval_option": map[string]any{
 				"approvalId": ctx.ID,
 				"toolCallId": ctx.ToolCallID,
-				"optionId":   option.ID,
-				"value":      option.Value,
+				"choice":     choice.Key,
 			},
 		},
 	}
 }
 
 func FinalMetadataEdit(portalKey networkid.PortalKey, sender networkid.UserID, messageID networkid.MessageID, run aistream.Run, timestamp time.Time) *simplevent.Message[*aistream.Run] {
-	finalContent, finalExtra := aimatrix.AnchorContent(run)
+	finalContent, finalExtra := aimatrix.FinalContent(run)
 	return &simplevent.Message[*aistream.Run]{
 		EventMeta:     eventMeta(bridgev2.RemoteEventEdit, portalKey, sender, timestamp),
 		Data:          &run,

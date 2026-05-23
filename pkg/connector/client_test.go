@@ -12,6 +12,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
 func TestGetRemoteEchoBehavior(t *testing.T) {
@@ -104,6 +105,13 @@ func TestInitialAIAnchorRunKeepsPreviewButNotTerminalMetadata(t *testing.T) {
 	if anchor.Preview.Text == "" {
 		t.Fatal("expected anchor to keep useful preview text")
 	}
+	uiMessage := anchor.InitialUIMessage()
+	if len(uiMessage.Parts) != 1 || uiMessage.Parts[0]["type"] != "text" || uiMessage.Parts[0]["content"] != "visible preview" {
+		t.Fatalf("anchor UI message should include visible preview text part: %#v", uiMessage.Parts)
+	}
+	if uiMessage.Metadata["runId"] != run.RunID {
+		t.Fatalf("anchor UI metadata missing run id: %#v", uiMessage.Metadata)
+	}
 	if anchor.Status.State != "streaming" {
 		t.Fatalf("anchor status = %#v, want streaming", anchor.Status)
 	}
@@ -115,12 +123,44 @@ func TestInitialAIAnchorRunKeepsPreviewButNotTerminalMetadata(t *testing.T) {
 	}
 }
 
+func TestCarrierTimestampUsesEventOffsetFromRunStart(t *testing.T) {
+	run := aistream.Run{
+		Events: []agui.Event{
+			{"timestamp": int64(10_000), "type": agui.EventRunStarted, "threadId": "thread-1"},
+			{"timestamp": int64(13_500), "type": agui.EventTextMessageContent, "messageId": "msg-1", "delta": "later"},
+		},
+	}
+	streamStart := time.Unix(100, 0)
+	target := carrierTimestamp(run, aistream.Carrier{Envelopes: []aistream.Envelope{{
+		Part: run.Events[1],
+	}}}, streamStart)
+	if want := streamStart.Add(3500 * time.Millisecond); !target.Equal(want) {
+		t.Fatalf("target = %s, want %s", target, want)
+	}
+}
+
+func TestSplitCarriersForTimedEmissionKeepsOneEnvelopePerCarrier(t *testing.T) {
+	carriers := splitCarriersForTimedEmission([]aistream.Carrier{{
+		Envelopes: []aistream.Envelope{
+			{Seq: 1},
+			{Seq: 2},
+		},
+	}})
+	if len(carriers) != 2 {
+		t.Fatalf("carrier count = %d, want 2", len(carriers))
+	}
+	if carriers[0].Envelopes[0].Seq != 1 || carriers[1].Envelopes[0].Seq != 2 {
+		t.Fatalf("bad split carriers: %#v", carriers)
+	}
+}
+
 func TestApprovalContextForMessageFallsBackToStoredMessage(t *testing.T) {
 	want := aistream.ApprovalContext{
 		ID:          "approval-1",
 		ThreadID:    "thread-1",
 		RunID:       "run-1",
 		MessageID:   "msg-1",
+		Command:     "stream-tools 120 shell#approval",
 		ToolCallID:  "tool-1",
 		TargetEvent: "$event",
 		SeqStart:    12,
@@ -149,4 +189,45 @@ func TestApprovalContextForMessageFallsBackToStoredMessage(t *testing.T) {
 	if got.ID != want.ID || got.RunID != want.RunID || got.TargetEvent != want.TargetEvent || got.SeqStart != want.SeqStart {
 		t.Fatalf("approval context = %#v, want %#v", got, want)
 	}
+}
+
+func TestApprovalOptionReactionIsBridgeManagedFallback(t *testing.T) {
+	msg := &bridgev2.MatrixReaction{
+		MatrixEventBase: bridgev2.MatrixEventBase[*event.ReactionEventContent]{
+			Event: &event.Event{Content: event.Content{Raw: map[string]any{
+				"com.beeper.ai.approval_option": map[string]any{"choice": "approve"},
+			}}},
+		},
+	}
+	if !isApprovalOptionReaction(msg) {
+		t.Fatal("expected managed approval option reaction")
+	}
+	if isApprovalOptionReaction(&bridgev2.MatrixReaction{MatrixEventBase: bridgev2.MatrixEventBase[*event.ReactionEventContent]{Event: &event.Event{Content: event.Content{Raw: map[string]any{}}}}}) {
+		t.Fatal("plain user reaction must not be treated as a managed approval option")
+	}
+}
+
+func TestAnnotateApprovalEventIDsAddsReactionTargetEventToStreamPrompt(t *testing.T) {
+	run := aistream.NewRun("run-1", "thread-1", aistream.DefaultModel, "ai", "AI", time.Unix(10, 0))
+	writer := aistream.NewWriter(run, func() time.Time { return time.Unix(10, 0) })
+	writer.ToolApprovalRequested("tool-1", "shell", map[string]any{"command": "ls"}, agui.ToolApproval{
+		ID:            "approval-1",
+		NeedsApproval: true,
+	})
+
+	annotateApprovalEventIDs(run, map[string]id.EventID{
+		"approval-1": "$approval",
+	})
+
+	for _, evt := range run.Events {
+		if evt["type"] != agui.EventCustom || evt["name"] != agui.ApprovalCustomRequested {
+			continue
+		}
+		value, _ := evt["value"].(map[string]any)
+		if value["approvalMessageId"] != "approval-1" || value["approvalEventId"] != "$approval" {
+			t.Fatalf("approval stream event missing target ids: %#v", value)
+		}
+		return
+	}
+	t.Fatal("missing approval-requested event")
 }

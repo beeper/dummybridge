@@ -53,6 +53,68 @@ type Preview struct {
 	Truncated bool   `json:"truncated"`
 }
 
+type UIMessageMetadata struct {
+	ThreadID string      `json:"threadId"`
+	RunID    string      `json:"runId"`
+	Status   Status      `json:"status"`
+	Usage    *agui.Usage `json:"usage,omitempty"`
+}
+
+func (m UIMessageMetadata) Map() map[string]any {
+	out := map[string]any{
+		"threadId": m.ThreadID,
+		"runId":    m.RunID,
+		"status":   m.Status,
+	}
+	if m.Usage != nil {
+		out["usage"] = *m.Usage
+	}
+	return out
+}
+
+type RunMetadata struct {
+	Schema    string
+	Protocol  string
+	ThreadID  string
+	RunID     string
+	MessageID string
+	AgentID   string
+	AgentName string
+	Model     string
+	Usage     agui.Usage
+	Status    Status
+	Approvals []ApprovalSummary
+	Artifacts ArtifactSummary
+	Data      map[string]any
+	Preview   Preview
+}
+
+func (m RunMetadata) Map() map[string]any {
+	return map[string]any{
+		"schema":    m.Schema,
+		"protocol":  m.Protocol,
+		"threadId":  m.ThreadID,
+		"runId":     m.RunID,
+		"messageId": m.MessageID,
+		"agent": map[string]any{
+			"id":          m.AgentID,
+			"displayName": m.AgentName,
+		},
+		"model": m.Model,
+		"usage": map[string]any{
+			"promptTokens":     m.Usage.PromptTokens,
+			"completionTokens": m.Usage.CompletionTokens,
+			"totalTokens":      m.Usage.TotalTokens,
+		},
+		"usageDetails": map[string]any{},
+		"status":       m.Status,
+		"approvals":    m.Approvals,
+		"artifacts":    m.Artifacts,
+		"data":         m.Data,
+		"preview":      m.Preview,
+	}
+}
+
 type ApprovalSummary struct {
 	ID         string         `json:"id"`
 	ToolCallID string         `json:"toolCallId"`
@@ -169,15 +231,10 @@ func (w *Writer) ToolStart(toolCallID, name string, index int, approval *agui.To
 
 func (w *Writer) ToolApprovalRequested(toolCallID, name string, input any, approval agui.ToolApproval) {
 	w.recordApprovalRequest(toolCallID, name, &approval)
-	w.Add(w.builder.Custom(agui.ApprovalCustomRequested, map[string]any{
-		"threadId":   w.Run.ThreadID,
-		"runId":      w.Run.RunID,
-		"messageId":  w.Run.MessageID,
-		"toolCallId": toolCallID,
-		"toolName":   name,
-		"input":      input,
-		"approval":   approval,
-	}))
+	w.Add(w.builder.Custom(
+		agui.ApprovalCustomRequested,
+		NewApprovalRequestedValue(*w.Run, toolCallID, name, input, approval).Map(),
+	))
 }
 
 func (w *Writer) recordApprovalRequest(toolCallID, name string, approval *agui.ToolApproval) {
@@ -209,6 +266,48 @@ func (w *Writer) ToolEnd(toolCallID, name string, input, result any) {
 
 func (w *Writer) ToolApprovalInputComplete(toolCallID, name string, input any) {
 	w.Add(w.builder.ToolCallEnd(toolCallID, name, input, nil, agui.ToolStateApprovalRequested))
+}
+
+func (w *Writer) ToolApprovalResponded(toolCallID, name string, input any, response agui.ToolApprovalResponse) {
+	for i := range w.Run.Approvals {
+		if w.Run.Approvals[i].ID == response.ID {
+			w.Run.Approvals[i].State = approvalSummaryState(response)
+			w.Run.Approvals[i].Always = response.Always
+			w.Run.Approvals[i].Reason = response.Reason
+			w.Run.Approvals[i].Fields = response.Fields
+			w.Run.Approvals[i].Metadata = response.Metadata
+		}
+	}
+	w.Add(w.builder.Custom(agui.ApprovalCustomResponded, map[string]any{
+		"threadId":   w.Run.ThreadID,
+		"runId":      w.Run.RunID,
+		"messageId":  w.Run.MessageID,
+		"toolCallId": toolCallID,
+		"toolName":   name,
+		"approval":   response,
+	}))
+	result := map[string]any{
+		"approvalId": response.ID,
+		"always":     response.Always,
+	}
+	if response.Fields != nil {
+		result["fields"] = response.Fields
+	}
+	if response.Metadata != nil {
+		result["metadata"] = response.Metadata
+	}
+	if response.Approved {
+		result["state"] = agui.ToolResultStateComplete
+		result["approved"] = true
+	} else {
+		reason := response.Reason
+		if reason == "" {
+			reason = "denied"
+		}
+		result["state"] = agui.ToolResultStateError
+		result["reason"] = reason
+	}
+	w.Add(w.builder.ToolCallEnd(toolCallID, name, input, jsonString(result), agui.ToolStateApprovalResponded))
 }
 
 func (w *Writer) ToolResult(toolCallID, content, state string) {
@@ -304,7 +403,7 @@ func (w *Writer) addFinalSnapshot() {
 	if w == nil || w.Run == nil {
 		return
 	}
-	w.MessagesSnapshot([]agui.UIMessage{w.Run.FinalUIMessageSnapshot(0)})
+	w.MessagesSnapshot([]agui.UIMessage{w.Run.FinalUIMessage(0, true)})
 }
 
 func (w *Writer) finishReasoning() {
@@ -352,16 +451,11 @@ func (t Run) Text() string {
 	return out.String()
 }
 
-func (t Run) FinalUIMessageSnapshot(textBudget int) agui.UIMessage {
+func (t Run) FinalUIMessage(textBudget int, includeThinking bool) agui.UIMessage {
 	message := agui.UIMessage{
-		ID:   t.MessageID,
-		Role: agui.RoleAssistant,
-		Metadata: map[string]any{
-			"threadId": t.ThreadID,
-			"runId":    t.RunID,
-			"status":   t.Status,
-			"usage":    t.Usage,
-		},
+		ID:       t.MessageID,
+		Role:     agui.RoleAssistant,
+		Metadata: t.UIMessageMetadata(true).Map(),
 	}
 	var textPart agui.MessagePart
 	var thinkingPart agui.MessagePart
@@ -391,6 +485,9 @@ func (t Run) FinalUIMessageSnapshot(textBudget int) agui.UIMessage {
 		case agui.EventReasoningMsgCont:
 			delta, _ := evt["delta"].(string)
 			if delta == "" {
+				continue
+			}
+			if !includeThinking {
 				continue
 			}
 			if thinkingPart == nil {
@@ -504,15 +601,52 @@ func (t Run) FinalUIMessageSnapshot(textBudget int) agui.UIMessage {
 	}
 	compactTextPart(textPart, textBudget)
 	compactTextPart(thinkingPart, textBudget)
+	if len(message.Parts) > 1 {
+		visible := make([]agui.MessagePart, 0, len(message.Parts))
+		other := make([]agui.MessagePart, 0, len(message.Parts))
+		for _, part := range message.Parts {
+			switch part["type"] {
+			case "text", "thinking":
+				visible = append(visible, part)
+			default:
+				other = append(other, part)
+			}
+		}
+		if len(visible) > 0 {
+			message.Parts = append(visible, other...)
+		}
+	}
 	return message
 }
 
-func (t Run) InitialUIMessage() map[string]any {
-	return map[string]any{
-		"id":    t.MessageID,
-		"role":  agui.RoleAssistant,
-		"parts": []any{},
+func (t Run) InitialUIMessage() agui.UIMessage {
+	message := agui.UIMessage{
+		ID:       t.MessageID,
+		Role:     agui.RoleAssistant,
+		Metadata: t.UIMessageMetadata(false).Map(),
 	}
+	if t.Preview.Text != "" {
+		message.Parts = []agui.MessagePart{{
+			"type":    "text",
+			"content": t.Preview.Text,
+			"state":   agui.PartStateStreaming,
+		}}
+	} else {
+		message.Parts = []agui.MessagePart{}
+	}
+	return message
+}
+
+func (t Run) UIMessageMetadata(includeUsage bool) UIMessageMetadata {
+	metadata := UIMessageMetadata{
+		ThreadID: t.ThreadID,
+		RunID:    t.RunID,
+		Status:   t.Status,
+	}
+	if includeUsage {
+		metadata.Usage = &t.Usage
+	}
+	return metadata
 }
 
 func compactTextPart(part agui.MessagePart, budget int) {
@@ -574,28 +708,25 @@ func approvalMapID(value any) string {
 }
 
 func (t Run) Metadata() map[string]any {
-	return map[string]any{
-		"schema":    "com.beeper.ai.run.v1",
-		"protocol":  "ag-ui",
-		"threadId":  t.ThreadID,
-		"runId":     t.RunID,
-		"messageId": t.MessageID,
-		"agent": map[string]any{
-			"id":          t.AgentID,
-			"displayName": t.AgentName,
-		},
-		"model": t.Model,
-		"usage": map[string]any{
-			"promptTokens":     t.Usage.PromptTokens,
-			"completionTokens": t.Usage.CompletionTokens,
-			"totalTokens":      t.Usage.TotalTokens,
-		},
-		"usageDetails": map[string]any{},
-		"status":       t.Status,
-		"approvals":    t.Approvals,
-		"artifacts":    t.Artifacts,
-		"data":         t.Data,
-		"preview":      t.Preview,
+	return t.RunMetadata().Map()
+}
+
+func (t Run) RunMetadata() RunMetadata {
+	return RunMetadata{
+		Schema:    "com.beeper.ai.run.v1",
+		Protocol:  "ag-ui",
+		ThreadID:  t.ThreadID,
+		RunID:     t.RunID,
+		MessageID: t.MessageID,
+		AgentID:   t.AgentID,
+		AgentName: t.AgentName,
+		Model:     t.Model,
+		Usage:     t.Usage,
+		Status:    t.Status,
+		Approvals: t.Approvals,
+		Artifacts: t.Artifacts,
+		Data:      t.Data,
+		Preview:   t.Preview,
 	}
 }
 

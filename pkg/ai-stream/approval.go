@@ -2,26 +2,25 @@ package aistream
 
 import (
 	"strings"
-	"time"
 
 	"github.com/beeper/dummybridge/pkg/ag-ui"
 )
 
 const (
-	ApprovalReactionAllowOnce   = "approval.allow_once"
-	ApprovalReactionAllowAlways = "approval.allow_always"
-	ApprovalReactionDeny        = "approval.deny"
+	ApprovalChoiceApprove       = "approve"
+	ApprovalChoiceAlwaysApprove = "always_approve"
+	ApprovalChoiceDeny          = "deny"
 )
 
-type ReactionOption[T any] struct {
-	ID     string   `json:"id"`
-	Label  string   `json:"label"`
-	Values []string `json:"values"`
-	Value  T        `json:"value"`
+type ApprovalChoice struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Alias string `json:"alias"`
+	Style string `json:"style,omitempty"`
 }
 
-type ApprovalCleanup[T any] struct {
-	Selected              ReactionOption[T]
+type ApprovalCleanup struct {
+	Selected              ApprovalChoice
 	SelectedReactionEvent string
 	RedactReactionEvents  []string
 	Matched               bool
@@ -39,6 +38,7 @@ type ApprovalContext struct {
 	ThreadID         string `json:"threadId"`
 	RunID            string `json:"runId"`
 	MessageID        string `json:"messageId"`
+	Command          string `json:"command"`
 	ToolCallID       string `json:"toolCallId"`
 	ToolName         string `json:"toolName"`
 	TargetEvent      string `json:"target_event"`
@@ -50,63 +50,189 @@ type ApprovalContext struct {
 	PreviewTruncated bool   `json:"previewTruncated,omitempty"`
 }
 
-func DefaultApprovalOptions(approvalID string) []ReactionOption[agui.ToolApprovalResponse] {
-	return []ReactionOption[agui.ToolApprovalResponse]{
+type ApprovalRequestedValue struct {
+	ThreadID          string
+	RunID             string
+	MessageID         string
+	ToolCallID        string
+	ToolName          string
+	Input             any
+	Approval          agui.ToolApproval
+	ApprovalMessageID string
+	ApprovalEventID   string
+	Choices           []ApprovalChoice
+}
+
+type ApprovalNotice struct {
+	Schema     string
+	ID         string
+	MessageID  string
+	ToolCallID string
+	ToolName   string
+	State      string
+	Choices    []ApprovalChoice
+}
+
+func NewApprovalRequestedValue(run Run, toolCallID, toolName string, input any, approval agui.ToolApproval) ApprovalRequestedValue {
+	return ApprovalRequestedValue{
+		ThreadID:          run.ThreadID,
+		RunID:             run.RunID,
+		MessageID:         run.MessageID,
+		ToolCallID:        toolCallID,
+		ToolName:          toolName,
+		Input:             input,
+		Approval:          approval,
+		ApprovalMessageID: approval.ID,
+		Choices:           DefaultApprovalChoices(),
+	}
+}
+
+func NewApprovalNotice(ctx ApprovalContext, choices []ApprovalChoice) ApprovalNotice {
+	return ApprovalNotice{
+		Schema:     "com.beeper.ai.approval.v1",
+		ID:         ctx.ID,
+		MessageID:  ctx.MessageID,
+		ToolCallID: ctx.ToolCallID,
+		ToolName:   ctx.ToolName,
+		State:      "requested",
+		Choices:    choices,
+	}
+}
+
+func (v ApprovalRequestedValue) Map() map[string]any {
+	value := map[string]any{
+		"threadId":          v.ThreadID,
+		"runId":             v.RunID,
+		"messageId":         v.MessageID,
+		"toolCallId":        v.ToolCallID,
+		"toolName":          v.ToolName,
+		"input":             v.Input,
+		"approval":          v.Approval,
+		"approvalMessageId": v.ApprovalMessageID,
+		"choices":           v.Choices,
+	}
+	if v.ApprovalEventID != "" {
+		value["approvalEventId"] = v.ApprovalEventID
+	}
+	return value
+}
+
+func (n ApprovalNotice) Map() map[string]any {
+	return map[string]any{
+		"schema":     n.Schema,
+		"id":         n.ID,
+		"messageId":  n.MessageID,
+		"toolCallId": n.ToolCallID,
+		"toolName":   n.ToolName,
+		"state":      n.State,
+		"choices":    ApprovalChoicesAsAny(n.Choices),
+	}
+}
+
+func ApprovalChoicesAsAny(choices []ApprovalChoice) []any {
+	out := make([]any, 0, len(choices))
+	for _, choice := range choices {
+		item := map[string]any{
+			"key":   choice.Key,
+			"label": choice.Label,
+			"alias": choice.Alias,
+		}
+		if choice.Style != "" {
+			item["style"] = choice.Style
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func ApprovalIDFromRequestedValue(value map[string]any) string {
+	approval, _ := value["approval"].(agui.ToolApproval)
+	if approval.ID != "" {
+		return approval.ID
+	}
+	if raw, ok := value["approval"].(map[string]any); ok {
+		approvalID, _ := raw["id"].(string)
+		return approvalID
+	}
+	return ""
+}
+
+func SetApprovalRequestedEventID(value map[string]any, eventID string) bool {
+	if value == nil || eventID == "" {
+		return false
+	}
+	approvalID := ApprovalIDFromRequestedValue(value)
+	if approvalID == "" {
+		return false
+	}
+	value["approvalMessageId"] = approvalID
+	value["approvalEventId"] = eventID
+	return true
+}
+
+func DefaultApprovalChoices() []ApprovalChoice {
+	return []ApprovalChoice{
 		{
-			ID:     ApprovalReactionAllowOnce,
-			Label:  "Allow",
-			Values: []string{"👍", "approval.allow_once", "allow", "allow_once"},
-			Value:  agui.ToolApprovalResponse{ID: approvalID, Approved: true},
+			Key:   ApprovalChoiceApprove,
+			Label: "Approve",
+			Alias: "✅",
 		},
 		{
-			ID:     ApprovalReactionAllowAlways,
-			Label:  "Always allow",
-			Values: []string{"✅", "approval.allow_always", "always", "allow_always"},
-			Value:  agui.ToolApprovalResponse{ID: approvalID, Approved: true, Always: true},
+			Key:   ApprovalChoiceAlwaysApprove,
+			Label: "Always approve",
+			Alias: "☑️",
 		},
 		{
-			ID:     ApprovalReactionDeny,
-			Label:  "Deny",
-			Values: []string{"👎", "approval.deny", "deny", "reject"},
-			Value:  agui.ToolApprovalResponse{ID: approvalID, Approved: false, Reason: "denied"},
+			Key:   ApprovalChoiceDeny,
+			Label: "Deny",
+			Alias: "❌",
+			Style: "danger",
 		},
 	}
 }
 
-func ResolveReaction[T any](options []ReactionOption[T], raw string) (ReactionOption[T], bool) {
+func ResolveApprovalChoice(choices []ApprovalChoice, raw string) (ApprovalChoice, bool) {
 	key := NormalizeReaction(raw)
-	for _, option := range options {
-		if NormalizeReaction(option.ID) == key {
-			return option, true
-		}
-		for _, value := range option.Values {
-			if NormalizeReaction(value) == key {
-				return option, true
-			}
+	for _, choice := range choices {
+		if NormalizeReaction(choice.Key) == key || NormalizeReaction(choice.Alias) == key {
+			return choice, true
 		}
 	}
-	var zero ReactionOption[T]
+	var zero ApprovalChoice
 	return zero, false
 }
 
-func CleanupReactions[T any](options []ReactionOption[T], selectedKey string, events []ReactionEvent, bridgeSender string) ApprovalCleanup[T] {
-	selected, ok := ResolveReaction(options, selectedKey)
-	if !ok {
-		return ApprovalCleanup[T]{}
+func ApprovalResponseForChoice(approvalID string, choice ApprovalChoice) agui.ToolApprovalResponse {
+	switch choice.Key {
+	case ApprovalChoiceApprove:
+		return agui.ToolApprovalResponse{ID: approvalID, Approved: true}
+	case ApprovalChoiceAlwaysApprove:
+		return agui.ToolApprovalResponse{ID: approvalID, Approved: true, Always: true}
+	case ApprovalChoiceDeny:
+		return agui.ToolApprovalResponse{ID: approvalID, Approved: false, Reason: "denied"}
+	default:
+		return agui.ToolApprovalResponse{ID: approvalID, Approved: false, Reason: "invalid approval choice"}
 	}
-	cleanup := ApprovalCleanup[T]{Selected: selected, Matched: true}
+}
+
+func CleanupApprovalReactions(choices []ApprovalChoice, selectedKey string, events []ReactionEvent, bridgeSender string) ApprovalCleanup {
+	selected, ok := ResolveApprovalChoice(choices, selectedKey)
+	if !ok {
+		return ApprovalCleanup{}
+	}
+	cleanup := ApprovalCleanup{Selected: selected, Matched: true}
 	for _, evt := range events {
 		if evt.EventID == "" {
 			continue
 		}
-		option, matchesOption := ResolveReaction(options, evt.Key)
-		isSelected := matchesOption && option.ID == selected.ID
+		choice, matchesChoice := ResolveApprovalChoice(choices, evt.Key)
+		isSelected := matchesChoice && choice.Key == selected.Key
 		isBridge := evt.Bridge || (bridgeSender != "" && evt.Sender == bridgeSender)
 		if isSelected && !isBridge && cleanup.SelectedReactionEvent == "" {
 			cleanup.SelectedReactionEvent = evt.EventID
 			continue
 		}
-		if isBridge || (matchesOption && !isSelected) {
+		if isBridge || (matchesChoice && !isSelected) {
 			cleanup.RedactReactionEvents = append(cleanup.RedactReactionEvents, evt.EventID)
 		}
 	}
@@ -117,73 +243,6 @@ func NormalizeReaction(reaction string) string {
 	reaction = strings.TrimSpace(reaction)
 	reaction = strings.ReplaceAll(reaction, "\ufe0f", "")
 	return strings.ToLower(reaction)
-}
-
-func ApprovalResponseRun(ctx ApprovalContext, response agui.ToolApprovalResponse, now time.Time) Run {
-	if response.ID == "" {
-		response.ID = ctx.ID
-	}
-	agentID := ctx.AgentID
-	if agentID == "" {
-		agentID = "ai"
-	}
-	agentName := ctx.AgentName
-	if agentName == "" {
-		agentName = "AI"
-	}
-	model := ctx.Model
-	if model == "" {
-		model = DefaultModel
-	}
-	run := NewRun("approval-"+ctx.ID, ctx.ThreadID, model, agentID, agentName, now)
-	run.RunID = ctx.RunID
-	run.MessageID = ctx.MessageID
-	run.ToolCallID = ctx.ToolCallID
-	run.ApprovalID = ctx.ID
-	run.Status = Status{State: "complete"}
-	run.Preview = Preview{Text: ctx.PreviewText, Truncated: ctx.PreviewTruncated}
-	run.Approvals = []ApprovalSummary{{
-		ID:         ctx.ID,
-		ToolCallID: ctx.ToolCallID,
-		State:      approvalSummaryState(response),
-		Always:     response.Always,
-		Reason:     response.Reason,
-		Fields:     response.Fields,
-		Metadata:   response.Metadata,
-	}}
-	builder := agui.NewEventBuilder(model, func() time.Time { return now })
-	run.Events = append(run.Events, builder.Custom(agui.ApprovalCustomResponded, map[string]any{
-		"threadId":   ctx.ThreadID,
-		"runId":      ctx.RunID,
-		"messageId":  ctx.MessageID,
-		"toolCallId": ctx.ToolCallID,
-		"toolName":   ctx.ToolName,
-		"approval":   response,
-	}))
-	result := map[string]any{
-		"approvalId": response.ID,
-		"always":     response.Always,
-	}
-	if response.Fields != nil {
-		result["fields"] = response.Fields
-	}
-	if response.Metadata != nil {
-		result["metadata"] = response.Metadata
-	}
-	if response.Approved {
-		result["state"] = agui.ToolResultStateComplete
-		result["approved"] = true
-	} else {
-		reason := response.Reason
-		if reason == "" {
-			reason = "denied"
-		}
-		result["state"] = agui.ToolResultStateError
-		result["reason"] = reason
-		run.Status = Status{State: "error", Error: result}
-	}
-	run.Events = append(run.Events, builder.ToolCallEnd(ctx.ToolCallID, ctx.ToolName, nil, jsonString(result), agui.ToolStateApprovalResponded))
-	return *run
 }
 
 func approvalSummaryState(response agui.ToolApprovalResponse) string {

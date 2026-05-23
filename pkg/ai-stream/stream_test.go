@@ -69,6 +69,7 @@ func TestFinalSnapshotSplitsIntoBaseAndContinuationParts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var baseSnapshots, continuations int
+	var baseText string
 	var reconstructedText strings.Builder
 	var sawMetadata bool
 	for i, carrier := range carriers {
@@ -90,6 +91,11 @@ func TestFinalSnapshotSplitsIntoBaseAndContinuationParts(t *testing.T) {
 				metadata, ok := message["metadata"].(map[string]any)
 				if ok && metadata["runId"] == "run-1" {
 					sawMetadata = true
+				}
+				for _, part := range testFinalParts(t, message["parts"]) {
+					if part["type"] == "text" {
+						baseText += part["content"].(string)
+					}
 				}
 			case agui.EventCustom:
 				if env.Part["name"] != FinalPartsCustomName {
@@ -113,6 +119,9 @@ func TestFinalSnapshotSplitsIntoBaseAndContinuationParts(t *testing.T) {
 	}
 	if baseSnapshots != 1 || continuations == 0 || !sawMetadata {
 		t.Fatalf("expected one metadata base snapshot and continuations, base=%d continuations=%d metadata=%v", baseSnapshots, continuations, sawMetadata)
+	}
+	if baseText == "" {
+		t.Fatal("base final snapshot must keep visible text in the primary event")
 	}
 	if !strings.Contains(run.Text(), reconstructedText.String()) {
 		t.Fatalf("unexpected continuation text reconstruction length=%d", reconstructedText.Len())
@@ -222,30 +231,122 @@ func TestValidateRejectsLegacyOrInvalidToolResultShape(t *testing.T) {
 }
 
 func TestApprovalResolverMatchesEmojiKeysAndAliases(t *testing.T) {
-	options := DefaultApprovalOptions("approval-1")
-	for _, key := range []string{"👍", "approval.allow_once", "allow"} {
-		option, ok := ResolveReaction(options, key)
-		if !ok || !option.Value.Approved || option.Value.Always {
-			t.Fatalf("expected allow-once for %q, got %#v ok=%v", key, option, ok)
+	choices := DefaultApprovalChoices()
+	for _, key := range []string{"✅", "approve"} {
+		choice, ok := ResolveApprovalChoice(choices, key)
+		response := ApprovalResponseForChoice("approval-1", choice)
+		if !ok || !response.Approved || response.Always {
+			t.Fatalf("expected approve for %q, got %#v ok=%v", key, choice, ok)
 		}
 	}
-	option, ok := ResolveReaction(options, "always")
-	if !ok || !option.Value.Approved || !option.Value.Always {
-		t.Fatalf("expected allow-always, got %#v ok=%v", option, ok)
+	choice, ok := ResolveApprovalChoice(choices, "☑️")
+	response := ApprovalResponseForChoice("approval-1", choice)
+	if !ok || !response.Approved || !response.Always {
+		t.Fatalf("expected always-approve, got %#v ok=%v", choice, ok)
 	}
-	option, ok = ResolveReaction(options, "👎")
-	if !ok || option.Value.Approved || option.Value.Reason != "denied" {
-		t.Fatalf("expected denial, got %#v ok=%v", option, ok)
+	choice, ok = ResolveApprovalChoice(choices, "deny")
+	response = ApprovalResponseForChoice("approval-1", choice)
+	if !ok || response.Approved || response.Reason != "denied" {
+		t.Fatalf("expected denial, got %#v ok=%v", choice, ok)
+	}
+}
+
+func TestApprovalRequestedValueOwnsStreamPayloadShape(t *testing.T) {
+	run := NewRun("run-1", "thread-1", DefaultModel, "ai", "AI", time.Unix(10, 0))
+	run.MessageID = "msg-run-1"
+	approval := agui.ToolApproval{ID: "approval-1", NeedsApproval: true}
+
+	value := NewApprovalRequestedValue(*run, "tool-1", "shell", map[string]any{"command": "ls"}, approval).Map()
+
+	if value["threadId"] != "thread-1" || value["runId"] != "run-1" || value["messageId"] != "msg-run-1" {
+		t.Fatalf("bad run identifiers: %#v", value)
+	}
+	if value["toolCallId"] != "tool-1" || value["toolName"] != "shell" {
+		t.Fatalf("bad tool identifiers: %#v", value)
+	}
+	if value["approvalMessageId"] != "approval-1" {
+		t.Fatalf("missing approval message id: %#v", value)
+	}
+	if _, ok := value["approvalEventId"]; ok {
+		t.Fatalf("approval event id should only be added after Matrix send: %#v", value)
+	}
+	choices, ok := value["choices"].([]ApprovalChoice)
+	if !ok || len(choices) != len(DefaultApprovalChoices()) || choices[0].Key != ApprovalChoiceApprove {
+		t.Fatalf("bad approval choices: %#v", value["choices"])
+	}
+	if ApprovalIDFromRequestedValue(value) != "approval-1" {
+		t.Fatalf("approval id resolver failed for value: %#v", value)
+	}
+	if !SetApprovalRequestedEventID(value, "$approval") || value["approvalEventId"] != "$approval" {
+		t.Fatalf("failed to annotate approval event id: %#v", value)
+	}
+}
+
+func TestRunMetadataOwnsMatrixPayloadShape(t *testing.T) {
+	run := NewRun("run-1", "thread-1", DefaultModel, "agent-1", "Agent", time.Unix(10, 0))
+	run.MessageID = "msg-run-1"
+	run.Usage = agui.Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3}
+	run.Preview = Preview{Text: "hello", Truncated: false}
+
+	metadata := run.Metadata()
+
+	if metadata["schema"] != "com.beeper.ai.run.v1" || metadata["protocol"] != "ag-ui" {
+		t.Fatalf("bad protocol metadata: %#v", metadata)
+	}
+	if metadata["threadId"] != "thread-1" || metadata["runId"] != "run-1" || metadata["messageId"] != "msg-run-1" {
+		t.Fatalf("bad run identifiers: %#v", metadata)
+	}
+	agent, ok := metadata["agent"].(map[string]any)
+	if !ok || agent["id"] != "agent-1" || agent["displayName"] != "Agent" {
+		t.Fatalf("bad agent metadata: %#v", metadata["agent"])
+	}
+	usage, ok := metadata["usage"].(map[string]any)
+	if !ok || usage["promptTokens"] != 1 || usage["completionTokens"] != 2 || usage["totalTokens"] != 3 {
+		t.Fatalf("bad usage metadata: %#v", metadata["usage"])
+	}
+	if _, ok := metadata["usageDetails"].(map[string]any); !ok {
+		t.Fatalf("usage details should always be present: %#v", metadata)
+	}
+}
+
+func TestApprovalNoticeOwnsHiddenMessagePayloadShape(t *testing.T) {
+	notice := NewApprovalNotice(ApprovalContext{
+		ID:         "approval-1",
+		MessageID:  "msg-run-1",
+		ToolCallID: "tool-1",
+		ToolName:   "shell",
+	}, DefaultApprovalChoices()).Map()
+
+	if notice["schema"] != "com.beeper.ai.approval.v1" || notice["state"] != "requested" {
+		t.Fatalf("bad approval notice metadata: %#v", notice)
+	}
+	if notice["id"] != "approval-1" || notice["messageId"] != "msg-run-1" || notice["toolCallId"] != "tool-1" || notice["toolName"] != "shell" {
+		t.Fatalf("bad approval notice identifiers: %#v", notice)
+	}
+	choices, ok := notice["choices"].([]any)
+	if !ok || len(choices) != 3 {
+		t.Fatalf("bad approval notice choices: %#v", notice["choices"])
+	}
+	first, ok := choices[0].(map[string]any)
+	if !ok || first["key"] != ApprovalChoiceApprove || first["label"] != "Approve" || first["alias"] != "✅" {
+		t.Fatalf("bad first approval choice: %#v", choices[0])
+	}
+	if _, ok := first["style"]; ok {
+		t.Fatalf("empty style should be omitted from approval choices: %#v", first)
+	}
+	deny, ok := choices[2].(map[string]any)
+	if !ok || deny["style"] != "danger" {
+		t.Fatalf("deny choice should keep danger style: %#v", choices[2])
 	}
 }
 
 func TestCleanupKeepsSelectedUserReactionAndRemovesBridgeOptions(t *testing.T) {
-	options := DefaultApprovalOptions("approval-1")
-	cleanup := CleanupReactions(options, "👍", []ReactionEvent{
-		{EventID: "$bridge-allow", Sender: "ai", Key: "👍", Bridge: true},
-		{EventID: "$bridge-deny", Sender: "ai", Key: "👎", Bridge: true},
-		{EventID: "$user-allow", Sender: "@user:example", Key: "👍"},
-		{EventID: "$user-deny", Sender: "@user:example", Key: "👎"},
+	choices := DefaultApprovalChoices()
+	cleanup := CleanupApprovalReactions(choices, "✅", []ReactionEvent{
+		{EventID: "$bridge-allow", Sender: "ai", Key: "✅", Bridge: true},
+		{EventID: "$bridge-deny", Sender: "ai", Key: "❌", Bridge: true},
+		{EventID: "$user-allow", Sender: "@user:example", Key: "✅"},
+		{EventID: "$user-deny", Sender: "@user:example", Key: "❌"},
 	}, "ai")
 	if !cleanup.Matched || cleanup.SelectedReactionEvent != "$user-allow" {
 		t.Fatalf("bad selected reaction: %#v", cleanup)
@@ -254,93 +355,4 @@ func TestCleanupKeepsSelectedUserReactionAndRemovesBridgeOptions(t *testing.T) {
 	if !strings.Contains(got, "$bridge-allow") || !strings.Contains(got, "$bridge-deny") || !strings.Contains(got, "$user-deny") {
 		t.Fatalf("bad cleanup redactions: %#v", cleanup.RedactReactionEvents)
 	}
-}
-
-func TestApprovalResponseRunEmitsRespondedStateAndToolResult(t *testing.T) {
-	run := ApprovalResponseRun(ApprovalContext{
-		ID:          "approval-1",
-		ThreadID:    "thread-1",
-		RunID:       "run-1",
-		MessageID:   "msg-1",
-		ToolCallID:  "tool-1",
-		ToolName:    "shell",
-		TargetEvent: "$anchor",
-		SeqStart:    10,
-		PreviewText: "Use supportbrief for incremental patches.",
-	}, agui.ToolApprovalResponse{
-		Approved: false,
-		Reason:   "denied",
-		Fields:   map[string]any{"scope": "once"},
-		Metadata: map[string]any{"source": "reaction"},
-	}, time.Unix(10, 0))
-
-	if run.RunID != "run-1" || run.MessageID != "msg-1" {
-		t.Fatalf("approval response must continue the existing run/message, got %#v", run)
-	}
-	if run.Preview.Text != "Use supportbrief for incremental patches." {
-		t.Fatalf("approval response must preserve anchor preview, got %#v", run.Preview)
-	}
-	if len(run.Events) != 2 {
-		t.Fatalf("expected approval response and tool result events, got %#v", run.Events)
-	}
-	if run.Events[0]["type"] != agui.EventCustom || run.Events[0]["name"] != agui.ApprovalCustomResponded {
-		t.Fatalf("missing approval-responded event: %#v", run.Events[0])
-	}
-	if run.Events[1]["type"] != agui.EventToolCallEnd || run.Events[1]["state"] != agui.ToolStateApprovalResponded {
-		t.Fatalf("missing approval-responded tool end: %#v", run.Events[1])
-	}
-	result := jsonMap(t, run.Events[1]["result"])
-	if result["state"] != agui.ToolResultStateError || result["reason"] != "denied" {
-		t.Fatalf("expected structured denied result, got %#v", result)
-	}
-	if result["fields"].(map[string]any)["scope"] != "once" || result["metadata"].(map[string]any)["source"] != "reaction" {
-		t.Fatalf("expected flexible approval fields to survive, got %#v", result)
-	}
-	if run.Approvals[0].Fields["scope"] != "once" || run.Approvals[0].Metadata["source"] != "reaction" {
-		t.Fatalf("expected approval summary fields to survive, got %#v", run.Approvals[0])
-	}
-
-	carriers, err := PackRunFromSeq(run, "$anchor", CarrierBudgetBytes, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if carriers[0].Envelopes[0].Seq != 10 {
-		t.Fatalf("expected continuation seq 10, got %#v", carriers[0].Envelopes[0])
-	}
-}
-
-func TestApprovalResponseRunPreservesApprovedAlways(t *testing.T) {
-	run := ApprovalResponseRun(ApprovalContext{
-		ID:          "approval-1",
-		ThreadID:    "thread-1",
-		RunID:       "run-1",
-		MessageID:   "msg-1",
-		ToolCallID:  "tool-1",
-		ToolName:    "shell",
-		TargetEvent: "$anchor",
-	}, agui.ToolApprovalResponse{Approved: true, Always: true}, time.Unix(10, 0))
-
-	if run.Status.State != "complete" {
-		t.Fatalf("expected complete approval response run, got %#v", run.Status)
-	}
-	if len(run.Approvals) != 1 || run.Approvals[0].State != "approved-always" || !run.Approvals[0].Always {
-		t.Fatalf("bad approval summary: %#v", run.Approvals)
-	}
-	result := jsonMap(t, run.Events[1]["result"])
-	if result["state"] != agui.ToolResultStateComplete || result["approved"] != true || result["always"] != true {
-		t.Fatalf("bad approval result: %#v", result)
-	}
-}
-
-func jsonMap(t *testing.T, value any) map[string]any {
-	t.Helper()
-	text, ok := value.(string)
-	if !ok {
-		t.Fatalf("expected JSON string result, got %#v", value)
-	}
-	var out map[string]any
-	if err := json.Unmarshal([]byte(text), &out); err != nil {
-		t.Fatalf("failed to parse result %q: %v", text, err)
-	}
-	return out
 }

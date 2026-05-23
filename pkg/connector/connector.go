@@ -56,7 +56,7 @@ func (dc *DummyConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities
 }
 
 func (dc *DummyConnector) GetBridgeInfoVersion() (info, caps int) {
-	return 0, 0
+	return 0, 1
 }
 
 func (dc *DummyConnector) GetName() bridgev2.BridgeName {

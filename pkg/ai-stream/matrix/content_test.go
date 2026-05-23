@@ -25,9 +25,12 @@ func TestAnchorContentUsesVisibleTextAndAIProfile(t *testing.T) {
 	if content.BeeperPerMessageProfile == nil || content.BeeperPerMessageProfile.ID != "ai" || content.BeeperPerMessageProfile.Displayname != "AI" {
 		t.Fatalf("missing AI per-message profile: %#v", content.BeeperPerMessageProfile)
 	}
-	uiMessage, ok := extra[aistream.BeeperAIKey].(map[string]any)
-	if !ok || uiMessage["id"] == "" || uiMessage["metadata"] != nil {
+	uiMessage, ok := extra[aistream.BeeperAIKey].(agui.UIMessage)
+	if !ok || uiMessage.ID == "" || uiMessage.Metadata == nil || len(uiMessage.Parts) != 1 {
 		t.Fatalf("bad compact AI message: %#v", extra[aistream.BeeperAIKey])
+	}
+	if uiMessage.Parts[0]["type"] != "text" || uiMessage.Parts[0]["content"] != "visible preview" {
+		t.Fatalf("anchor AI message should include preview text part: %#v", uiMessage.Parts)
 	}
 	if extra[aistream.BeeperAIMetadataKey] == nil {
 		t.Fatalf("missing AI metadata: %#v", extra)
@@ -75,6 +78,34 @@ func TestAnchorContentRendersFinalPreviewAsMatrixHTML(t *testing.T) {
 	}
 }
 
+func TestFinalContentIncludesFinalUIParts(t *testing.T) {
+	run := aistream.NewRun("run-1", "thread-1", aistream.DefaultModel, "ai", "AI", time.Unix(10, 0))
+	writer := aistream.NewWriter(run, func() time.Time { return time.Unix(10, 0) })
+	writer.Start()
+	writer.Thinking("hidden reasoning")
+	writer.Text("final **preview**")
+	writer.Finish(agui.FinishReasonStop)
+
+	content, extra := FinalContent(*run)
+	if content.Body != "final **preview**" || content.Format != event.FormatHTML {
+		t.Fatalf("bad final preview content: %#v", content)
+	}
+	uiMessage, ok := extra[aistream.BeeperAIKey].(agui.UIMessage)
+	if !ok || len(uiMessage.Parts) != 2 || uiMessage.Parts[0]["type"] != "thinking" || uiMessage.Parts[1]["type"] != "text" {
+		t.Fatalf("final edit must include concrete UI parts: %#v", extra[aistream.BeeperAIKey])
+	}
+	if uiMessage.Parts[0]["content"] != "hidden reasoning" || uiMessage.Parts[1]["content"] == "" {
+		t.Fatalf("final edit must preserve reasoning and text parts: %#v", uiMessage.Parts)
+	}
+	if extra[aistream.BeeperAIMetadataKey] == nil {
+		t.Fatalf("missing final metadata: %#v", extra)
+	}
+	stream, ok := extra["com.beeper.stream"].(map[string]any)
+	if !ok || stream["type"] != aistream.BeeperAIStreamDeltas {
+		t.Fatalf("missing final stream descriptor: %#v", extra["com.beeper.stream"])
+	}
+}
+
 func TestCarrierContentIsHiddenTextCarrierWithDeltas(t *testing.T) {
 	carrier := aistream.Carrier{Envelopes: []aistream.Envelope{{
 		ThreadID:    "thread-1",
@@ -97,7 +128,7 @@ func TestCarrierContentIsHiddenTextCarrierWithDeltas(t *testing.T) {
 	}
 }
 
-func TestApprovalContentIncludesContextAndGenericReactionOptions(t *testing.T) {
+func TestApprovalContentIncludesContextAndChoices(t *testing.T) {
 	ctx := aistream.ApprovalContext{
 		ID:          "approval-1",
 		ThreadID:    "thread-1",
@@ -107,25 +138,28 @@ func TestApprovalContentIncludesContextAndGenericReactionOptions(t *testing.T) {
 		ToolName:    "shell",
 		TargetEvent: "$anchor",
 	}
-	options := aistream.DefaultApprovalOptions(ctx.ID)
+	choices := aistream.DefaultApprovalChoices()
 
-	content, extra := ApprovalContent(ctx, options)
-	if content.MsgType != event.MsgText || content.RelatesTo == nil || content.RelatesTo.EventID != "$anchor" {
+	content, extra := ApprovalContent(ctx, choices)
+	if content.MsgType != event.MsgText || content.RelatesTo == nil || content.RelatesTo.EventID != "$anchor" || content.RelatesTo.Type != ApprovalRelationType {
 		t.Fatalf("bad approval content: %#v", content)
 	}
 	meta, ok := extra["com.beeper.ai.approval"].(map[string]any)
 	if !ok {
 		t.Fatalf("missing approval metadata: %#v", extra)
 	}
-	if meta["id"] != ctx.ID || meta["runId"] != ctx.RunID || meta["messageId"] != ctx.MessageID || meta["toolCallId"] != ctx.ToolCallID {
+	if meta["schema"] != "com.beeper.ai.approval.v1" || meta["id"] != ctx.ID || meta["messageId"] != ctx.MessageID || meta["toolCallId"] != ctx.ToolCallID || meta["state"] != "requested" {
 		t.Fatalf("bad approval metadata: %#v", meta)
 	}
-	reactions, ok := meta["reactions"].([]any)
-	if !ok || len(reactions) != len(options) {
-		t.Fatalf("bad approval reactions: %#v", meta["reactions"])
+	if _, ok := meta["runId"]; ok {
+		t.Fatalf("approval event should not duplicate run metadata: %#v", meta)
 	}
-	first := reactions[0].(map[string]any)
-	if first["id"] != aistream.ApprovalReactionAllowOnce {
-		t.Fatalf("bad first reaction option: %#v", first)
+	approvalChoices, ok := meta["choices"].([]any)
+	if !ok || len(approvalChoices) != len(choices) {
+		t.Fatalf("bad approval choices: %#v", meta["choices"])
+	}
+	first := approvalChoices[0].(map[string]any)
+	if first["key"] != aistream.ApprovalChoiceApprove || first["alias"] != "✅" {
+		t.Fatalf("bad first approval choice: %#v", first)
 	}
 }

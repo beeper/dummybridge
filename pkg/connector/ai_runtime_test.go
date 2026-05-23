@@ -11,6 +11,7 @@ import (
 
 	"github.com/beeper/dummybridge/pkg/ag-ui"
 	"github.com/beeper/dummybridge/pkg/ai-stream"
+	"maunium.net/go/mautrix/id"
 )
 
 func TestParseCommandRecognizesHelpAliases(t *testing.T) {
@@ -156,6 +157,13 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 			if _, hasOptions := value["options"]; hasOptions {
 				t.Fatalf("AG-UI approval event must not embed Matrix reaction options: %#v", value)
 			}
+			if value["approvalMessageId"] != "approval-run-1-dummy-tool-1-shell" {
+				t.Fatalf("approval event should name the Matrix reaction target: %#v", value)
+			}
+			choices, ok := value["choices"].([]aistream.ApprovalChoice)
+			if !ok || len(choices) == 0 || choices[0].Key != aistream.ApprovalChoiceApprove {
+				t.Fatalf("approval event should duplicate renderer choices: %#v", value["choices"])
+			}
 			if value["input"] == nil {
 				t.Fatalf("approval event should include final tool input: %#v", value)
 			}
@@ -171,6 +179,247 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 		if evt["type"] == agui.EventRunFinished {
 			t.Fatalf("approval request should not finish the run before response: %#v", run.Events)
 		}
+	}
+}
+
+func TestApprovalPromptSeqStartsAtNextPackedCarrierSeq(t *testing.T) {
+	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream-tools 120 shell#approval --seed=7 --chunk-chars=32:32", time.Unix(10, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	carriers, err := aistream.PackRunFromSeq(*run, "$anchor", aistream.CarrierBudgetBytes, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextSeq := aistream.NextSeq(splitCarriersForTimedEmission(carriers))
+	if nextSeq <= 1 {
+		t.Fatalf("expected initial stream to consume carrier sequence numbers, got %d", nextSeq)
+	}
+
+	prompt := run.Prompts[0]
+	prompt.SeqStart = nextSeq
+	approvalCtx := aistream.ApprovalContext{
+		ID:          prompt.ID,
+		ThreadID:    run.ThreadID,
+		RunID:       run.RunID,
+		MessageID:   run.MessageID,
+		Command:     "stream-tools 120 shell#approval --seed=7 --chunk-chars=32:32",
+		ToolCallID:  prompt.ToolCallID,
+		ToolName:    prompt.ToolName,
+		TargetEvent: "$anchor",
+		AgentID:     run.AgentID,
+		AgentName:   run.AgentName,
+		SeqStart:    prompt.SeqStart,
+	}
+	continuation, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+		ID:       prompt.ID,
+		Approved: true,
+	}, time.Unix(20, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuationCarriers, err := aistream.PackRunFromSeq(continuation, "$anchor", aistream.CarrierBudgetBytes, approvalCtx.SeqStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(continuationCarriers) == 0 || len(continuationCarriers[0].Envelopes) == 0 || continuationCarriers[0].Envelopes[0].Seq != nextSeq {
+		t.Fatalf("continuation should start at next carrier seq %d, got %#v", nextSeq, continuationCarriers)
+	}
+	if continuationCarriers[0].Envelopes[0].Seq >= 100000 {
+		t.Fatalf("continuation sequence has legacy large gap: %#v", continuationCarriers[0])
+	}
+}
+
+func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
+	command := "stream-tools 120 shell#approval fetch --seed=7 --chunk-chars=32:32"
+	run, err := buildAIRun(context.Background(), "run-1", "thread-1", command, time.Unix(10, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Prompts) != 1 {
+		t.Fatalf("expected one approval prompt, got %#v", run.Prompts)
+	}
+	initialCarriers, err := aistream.PackRunFromSeq(*run, "$anchor", aistream.CarrierBudgetBytes, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialCarriers = splitCarriersForTimedEmission(initialCarriers)
+	nextSeq := aistream.NextSeq(initialCarriers)
+	if nextSeq <= 1 {
+		t.Fatalf("expected initial carriers to advance sequence, got %d", nextSeq)
+	}
+
+	prompt := run.Prompts[0]
+	prompt.SeqStart = nextSeq
+	approvalCtx := aistream.ApprovalContext{
+		ID:          prompt.ID,
+		ThreadID:    run.ThreadID,
+		RunID:       run.RunID,
+		MessageID:   run.MessageID,
+		Command:     command,
+		ToolCallID:  prompt.ToolCallID,
+		ToolName:    prompt.ToolName,
+		TargetEvent: "$anchor",
+		AgentID:     run.AgentID,
+		AgentName:   run.AgentName,
+		SeqStart:    prompt.SeqStart,
+	}
+	notice := aistream.NewApprovalNotice(approvalCtx, aistream.DefaultApprovalChoices()).Map()
+	if notice["id"] != prompt.ID || notice["messageId"] != run.MessageID || notice["state"] != "requested" {
+		t.Fatalf("approval notice does not target the paused run: %#v", notice)
+	}
+
+	annotateApprovalEventIDs(run, map[string]id.EventID{prompt.ID: "$approval"})
+	annotatedCarriers, err := aistream.PackRunFromSeq(*run, "$anchor", aistream.CarrierBudgetBytes, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var annotatedValue map[string]any
+	for _, carrier := range annotatedCarriers {
+		for _, env := range carrier.Envelopes {
+			if env.Part["type"] != agui.EventCustom || env.Part["name"] != agui.ApprovalCustomRequested {
+				continue
+			}
+			annotatedValue, _ = env.Part["value"].(map[string]any)
+		}
+	}
+	if annotatedValue == nil || annotatedValue["approvalMessageId"] != prompt.ID || annotatedValue["approvalEventId"] != "$approval" {
+		t.Fatalf("approval-requested stream event missing Matrix target: %#v", annotatedValue)
+	}
+	choices, ok := annotatedValue["choices"].([]any)
+	if !ok || len(choices) != len(aistream.DefaultApprovalChoices()) {
+		t.Fatalf("approval-requested stream event missing choices: %#v", annotatedValue["choices"])
+	}
+	firstChoice, ok := choices[0].(map[string]any)
+	if !ok || firstChoice["key"] != aistream.ApprovalChoiceApprove || firstChoice["label"] != "Approve" {
+		t.Fatalf("approval-requested stream event has bad choice shape: %#v", choices[0])
+	}
+
+	continuation, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+		ID:       prompt.ID,
+		Approved: true,
+	}, time.Unix(20, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(continuation.Prompts) != 0 {
+		t.Fatalf("continuation must not request approval again: %#v", continuation.Prompts)
+	}
+	if continuation.Status.State != "complete" {
+		t.Fatalf("approved continuation should finish the run, got %#v", continuation.Status)
+	}
+	continuationCarriers, err := aistream.PackRunFromSeq(continuation, "$anchor", aistream.CarrierBudgetBytes, approvalCtx.SeqStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(continuationCarriers) == 0 || len(continuationCarriers[0].Envelopes) == 0 || continuationCarriers[0].Envelopes[0].Seq != nextSeq {
+		t.Fatalf("continuation should resume at seq %d, got %#v", nextSeq, continuationCarriers)
+	}
+	if continuation.Events[0]["type"] != agui.EventCustom || continuation.Events[0]["name"] != agui.ApprovalCustomResponded {
+		t.Fatalf("continuation must start by acknowledging approval: %#v", continuation.Events)
+	}
+}
+
+func TestApprovalContinuationResumesOriginalRunAfterApprovedTool(t *testing.T) {
+	command := "stream-tools 240 shell#approval fetch --seed=7 --chunk-chars=32:32"
+	approvalCtx := aistream.ApprovalContext{
+		ID:          "approval-run-1-dummy-tool-1-shell",
+		ThreadID:    "thread-1",
+		RunID:       "run-1",
+		MessageID:   "msg-run-1",
+		Command:     command,
+		ToolCallID:  "dummy-tool-1-shell",
+		ToolName:    "shell",
+		TargetEvent: "$anchor",
+		AgentID:     "ai",
+		AgentName:   "AI",
+		SeqStart:    12,
+	}
+	run, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+		ID:       approvalCtx.ID,
+		Approved: true,
+	}, time.Unix(20, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Events) == 0 {
+		t.Fatal("expected continuation events")
+	}
+	if run.Events[0]["type"] != agui.EventCustom || run.Events[0]["name"] != agui.ApprovalCustomResponded {
+		t.Fatalf("first continuation event should acknowledge approval, got %#v", run.Events[0])
+	}
+	seenApprovedTool := false
+	seenLaterTool := false
+	seenFinished := false
+	for _, evt := range run.Events {
+		if evt["type"] == agui.EventToolCallEnd && evt["toolCallId"] == approvalCtx.ToolCallID {
+			if evt["state"] == agui.ToolStateApprovalResponded {
+				result := jsonResultMap(t, evt["result"])
+				if result["approved"] != true {
+					t.Fatalf("approved result missing approval state: %#v", result)
+				}
+				seenApprovedTool = true
+			}
+		}
+		if evt["type"] == agui.EventToolCallStart && evt["toolCallId"] == "dummy-tool-2-fetch" {
+			seenLaterTool = true
+		}
+		if evt["type"] == agui.EventRunFinished {
+			seenFinished = true
+		}
+	}
+	if !seenApprovedTool || !seenLaterTool || !seenFinished {
+		t.Fatalf("continuation did not resume fully: approved=%v laterTool=%v finished=%v events=%#v", seenApprovedTool, seenLaterTool, seenFinished, run.Events)
+	}
+	if run.Status.State != "complete" {
+		t.Fatalf("approved continuation status = %#v", run.Status)
+	}
+	if len(run.Prompts) != 0 {
+		t.Fatalf("finished continuation should not keep pending prompts: %#v", run.Prompts)
+	}
+}
+
+func TestApprovalContinuationStopsOriginalRunAfterDeniedTool(t *testing.T) {
+	command := "stream-tools 240 shell#approval fetch --seed=7 --chunk-chars=32:32"
+	approvalCtx := aistream.ApprovalContext{
+		ID:          "approval-run-1-dummy-tool-1-shell",
+		ThreadID:    "thread-1",
+		RunID:       "run-1",
+		MessageID:   "msg-run-1",
+		Command:     command,
+		ToolCallID:  "dummy-tool-1-shell",
+		ToolName:    "shell",
+		TargetEvent: "$anchor",
+		AgentID:     "ai",
+		AgentName:   "AI",
+		SeqStart:    12,
+	}
+	run, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+		ID:       approvalCtx.ID,
+		Approved: false,
+		Reason:   "denied",
+	}, time.Unix(20, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenDeniedTool := false
+	for _, evt := range run.Events {
+		if evt["type"] == agui.EventToolCallStart && evt["toolCallId"] == "dummy-tool-2-fetch" {
+			t.Fatalf("denied approval must not continue later tools: %#v", run.Events)
+		}
+		if evt["type"] == agui.EventToolCallEnd && evt["toolCallId"] == approvalCtx.ToolCallID && evt["state"] == agui.ToolStateApprovalResponded {
+			result := jsonResultMap(t, evt["result"])
+			if result["state"] != agui.ToolResultStateError || result["reason"] != "denied" {
+				t.Fatalf("bad denied result: %#v", result)
+			}
+			seenDeniedTool = true
+		}
+	}
+	if !seenDeniedTool {
+		t.Fatalf("missing denied approval result: %#v", run.Events)
+	}
+	if run.Status.State != "error" {
+		t.Fatalf("denied continuation status = %#v", run.Status)
 	}
 }
 
