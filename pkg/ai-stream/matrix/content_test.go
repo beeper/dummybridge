@@ -65,6 +65,20 @@ func TestAnchorContentKeepsLongRunsCompact(t *testing.T) {
 	}
 }
 
+func TestStreamingAnchorDoesNotIncludePreviewPart(t *testing.T) {
+	run := aistream.NewRun("run-1", "thread-1", aistream.DefaultModel, "ai", "AI", time.Unix(10, 0))
+	run.Preview = aistream.Preview{}
+
+	content, extra := AnchorContent(*run)
+	if content.Body != "..." {
+		t.Fatalf("empty streaming anchor should use placeholder body, got %q", content.Body)
+	}
+	uiMessage, ok := extra[aistream.BeeperAIKey].(agui.UIMessage)
+	if !ok || len(uiMessage.Parts) != 0 {
+		t.Fatalf("streaming anchor should not include an initial text snapshot: %#v", extra[aistream.BeeperAIKey])
+	}
+}
+
 func TestAnchorContentRendersFinalPreviewAsMatrixHTML(t *testing.T) {
 	run := aistream.NewRun("run-1", "thread-1", aistream.DefaultModel, "ai", "AI", time.Unix(10, 0))
 	run.Preview = aistream.Preview{Text: "Use **bold** and `code`"}
@@ -103,6 +117,29 @@ func TestFinalContentIncludesFinalUIParts(t *testing.T) {
 	stream, ok := extra["com.beeper.stream"].(map[string]any)
 	if !ok || stream["type"] != aistream.BeeperAIStreamDeltas {
 		t.Fatalf("missing final stream descriptor: %#v", extra["com.beeper.stream"])
+	}
+}
+
+func TestFinalContentDoesNotTruncateUIParts(t *testing.T) {
+	run := aistream.NewRun("run-1", "thread-1", aistream.DefaultModel, "ai", "AI", time.Unix(10, 0))
+	writer := aistream.NewWriter(run, func() time.Time { return time.Unix(10, 0) })
+	writer.Start()
+	full := strings.Repeat("| Artifact | State | Latency |\n| --- | --- | --- |\n| renderer | active | accepts markdown |\n\n", 100)
+	writer.Text(full)
+	writer.Finish(agui.FinishReasonStop)
+	expected := run.Text()
+
+	_, extra := FinalContent(*run)
+	uiMessage, ok := extra[aistream.BeeperAIKey].(agui.UIMessage)
+	if !ok || len(uiMessage.Parts) == 0 {
+		t.Fatalf("missing final UI message: %#v", extra[aistream.BeeperAIKey])
+	}
+	textPart := uiMessage.Parts[len(uiMessage.Parts)-1]
+	if textPart["content"] != expected {
+		t.Fatalf("final UI text was truncated: got %d bytes want %d", len(textPart["content"].(string)), len(expected))
+	}
+	if metadata, ok := textPart["providerMetadata"]; ok {
+		t.Fatalf("final UI text should not be marked truncated: %#v", metadata)
 	}
 }
 

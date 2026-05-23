@@ -603,6 +603,7 @@ func (dc *DummyClient) queueAIResponse(ctx context.Context, portal *bridgev2.Por
 func initialAIAnchorRun(run aistream.Run) aistream.Run {
 	run.Status = aistream.Status{State: "streaming"}
 	run.Usage = agui.Usage{}
+	run.Preview = aistream.Preview{}
 	return run
 }
 

@@ -661,6 +661,12 @@ func compactTextPart(part agui.MessagePart, budget int) {
 		return
 	}
 	content, _ := part["content"].(string)
+	if budget <= 0 {
+		if part["state"] == "" {
+			part["state"] = agui.PartStateDone
+		}
+		return
+	}
 	preview := BoundedPreview(content, budget)
 	part["content"] = preview
 	if len(preview) < len(content) {

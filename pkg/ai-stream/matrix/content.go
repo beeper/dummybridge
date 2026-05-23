@@ -26,7 +26,7 @@ func AnchorContent(run aistream.Run) (*event.MessageEventContent, map[string]any
 func FinalContent(run aistream.Run) (*event.MessageEventContent, map[string]any) {
 	content := previewContent(run)
 	extra := map[string]any{
-		aistream.BeeperAIKey:         run.FinalUIMessage(aistream.SnapshotTextBytes, true),
+		aistream.BeeperAIKey:         run.FinalUIMessage(0, true),
 		aistream.BeeperAIMetadataKey: run.Metadata(),
 		"com.beeper.stream": map[string]any{
 			"type": aistream.BeeperAIStreamDeltas,

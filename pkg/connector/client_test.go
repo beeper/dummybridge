@@ -94,7 +94,7 @@ func TestResolveApprovalOnceKeepsFirstSelection(t *testing.T) {
 	}
 }
 
-func TestInitialAIAnchorRunKeepsPreviewButNotTerminalMetadata(t *testing.T) {
+func TestInitialAIAnchorRunOmitsPreviewAndTerminalMetadata(t *testing.T) {
 	run := aistream.NewRun("run-1", "thread-1", aistream.DefaultModel, "ai", "AI", time.Unix(10, 0))
 	writer := aistream.NewWriter(run, func() time.Time { return time.Unix(10, 0) })
 	writer.Start()
@@ -102,12 +102,12 @@ func TestInitialAIAnchorRunKeepsPreviewButNotTerminalMetadata(t *testing.T) {
 	writer.Finish(agui.FinishReasonStop)
 
 	anchor := initialAIAnchorRun(*run)
-	if anchor.Preview.Text == "" {
-		t.Fatal("expected anchor to keep useful preview text")
+	if anchor.Preview.Text != "" {
+		t.Fatalf("anchor should not include initial preview text: %#v", anchor.Preview)
 	}
 	uiMessage := anchor.InitialUIMessage()
-	if len(uiMessage.Parts) != 1 || uiMessage.Parts[0]["type"] != "text" || uiMessage.Parts[0]["content"] != "visible preview" {
-		t.Fatalf("anchor UI message should include visible preview text part: %#v", uiMessage.Parts)
+	if len(uiMessage.Parts) != 0 {
+		t.Fatalf("anchor UI message should wait for stream deltas: %#v", uiMessage.Parts)
 	}
 	if uiMessage.Metadata["runId"] != run.RunID {
 		t.Fatalf("anchor UI metadata missing run id: %#v", uiMessage.Metadata)
