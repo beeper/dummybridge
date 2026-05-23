@@ -961,6 +961,12 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 				stepOpen = true
 			}
 		case randomActionTool:
+			if cmd.AllowApproval && cmd.Profile == "balanced" && rng.Intn(24) == 0 {
+				if err := handleTool(toolSpec{Name: randomToolName(rng), Approval: true, SequenceIndex: action + 1}); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := handleTool(toolSpec{Name: randomToolName(rng), SequenceIndex: action + 1}); err != nil {
 				return err
 			}

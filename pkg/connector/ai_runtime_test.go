@@ -703,14 +703,30 @@ func TestRandomModeApprovalPause(t *testing.T) {
 }
 
 func TestRandomProfilesCoverToolsArtifactsAndTransientData(t *testing.T) {
+	balanced := randomCommand{
+		sharedStreamOptions: sharedStreamOptions{
+			Profile:       "balanced",
+			AllowApproval: true,
+		},
+	}
+	seen := map[string]bool{}
+	rng := rand.New(rand.NewSource(2))
+	for range 400 {
+		options, total := buildRandomActionOptions(balanced)
+		seen[pickWeighted(options, total, rng)] = true
+	}
+	if seen[randomActionToolApproval] {
+		t.Fatalf("balanced profile should keep approvals rare via tool-call promotion, seen=%#v", seen)
+	}
+
 	cmd := randomCommand{
 		sharedStreamOptions: sharedStreamOptions{
 			Profile:       "tools",
 			AllowApproval: true,
 		},
 	}
-	seen := map[string]bool{}
-	rng := rand.New(rand.NewSource(4))
+	seen = map[string]bool{}
+	rng = rand.New(rand.NewSource(4))
 	for range 400 {
 		options, total := buildRandomActionOptions(cmd)
 		seen[pickWeighted(options, total, rng)] = true

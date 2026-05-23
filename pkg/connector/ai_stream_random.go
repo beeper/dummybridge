@@ -16,7 +16,7 @@ func buildRandomActionOptions(cmd randomCommand) ([]randomActionOption, int) {
 		{randomActionData, 1},
 		{randomActionDataTransient, 1},
 	}
-	if cmd.AllowApproval {
+	if cmd.AllowApproval && cmd.Profile != "balanced" {
 		options = append(options, randomActionOption{randomActionToolApproval, 2})
 	}
 	switch cmd.Profile {
