@@ -134,7 +134,7 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 				t.Fatalf("bad approval metadata: %#v", approval)
 			}
 			metadata, ok := evt["metadata"].(map[string]any)
-			if !ok || metadata["displayName"] != "Run Command" || metadata["iconId"] != "3255-2310" {
+			if !ok || metadata["displayName"] != "Run Command" {
 				t.Fatalf("bad tool display metadata: %#v", evt["metadata"])
 			}
 			foundToolStart = true
@@ -161,6 +161,10 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 			if value["approvalMessageId"] != "approval-run-1-dummy-tool-1-shell" {
 				t.Fatalf("approval event should name the Matrix reaction target: %#v", value)
 			}
+			metadata, ok := value["metadata"].(map[string]any)
+			if !ok || metadata["displayName"] != "Run Command" {
+				t.Fatalf("approval event should carry tool display metadata: %#v", value["metadata"])
+			}
 			choices, ok := value["choices"].([]aistream.ApprovalChoice)
 			if !ok || len(choices) == 0 || choices[0].Key != aistream.ApprovalChoiceApprove {
 				t.Fatalf("approval event should duplicate renderer choices: %#v", value["choices"])
@@ -180,6 +184,21 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 		if evt["type"] == agui.EventRunFinished {
 			t.Fatalf("approval request should not finish the run before response: %#v", run.Events)
 		}
+	}
+}
+
+func TestToolDisplayMetadataIsOptional(t *testing.T) {
+	if metadata := toolDisplayMetadata("unknown_tool"); metadata != nil {
+		t.Fatalf("unknown tools should not invent display metadata: %#v", metadata)
+	}
+
+	metadata := toolDisplayMetadata("linear.list_issues")
+	provider, _ := metadata["provider"].(map[string]any)
+	if metadata["displayName"] != "List Issues" || provider["displayName"] != "Linear" {
+		t.Fatalf("bad known tool metadata: %#v", metadata)
+	}
+	if _, ok := metadata["iconId"]; ok {
+		t.Fatalf("metadata must not use iconId: %#v", metadata)
 	}
 }
 

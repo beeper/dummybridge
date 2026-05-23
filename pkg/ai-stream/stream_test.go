@@ -235,7 +235,7 @@ func TestFinalUIMessageCarriesToolCallMetadata(t *testing.T) {
 	writer := NewWriter(run, func() time.Time { return time.Unix(10, 0) })
 	writer.ToolStartWithMetadata("tool-1", "calendar.get_events", 0, nil, map[string]any{
 		"displayName": "List Calendar Events",
-		"iconId":      "3257-5951",
+		"iconUrl":     "mxc://beeper.com/calendar",
 	})
 
 	message := run.FinalUIMessage(0, true)
@@ -243,7 +243,7 @@ func TestFinalUIMessageCarriesToolCallMetadata(t *testing.T) {
 		t.Fatalf("expected one part, got %#v", message.Parts)
 	}
 	metadata, ok := message.Parts[0]["metadata"].(map[string]any)
-	if !ok || metadata["displayName"] != "List Calendar Events" || metadata["iconId"] != "3257-5951" {
+	if !ok || metadata["displayName"] != "List Calendar Events" || metadata["iconUrl"] != "mxc://beeper.com/calendar" {
 		t.Fatalf("bad tool metadata: %#v", message.Parts[0])
 	}
 }

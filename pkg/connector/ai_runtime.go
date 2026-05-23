@@ -1021,7 +1021,8 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 	if spec.Approval {
 		approval = &agui.ToolApproval{ID: approvalID, NeedsApproval: true}
 	}
-	w.ToolStartWithMetadata(toolCallID, spec.Name, spec.SequenceIndex-1, approval, toolDisplayMetadata(spec.Name))
+	displayMetadata := toolDisplayMetadata(spec.Name)
+	w.ToolStartWithMetadata(toolCallID, spec.Name, spec.SequenceIndex-1, approval, displayMetadata)
 	annotateProviderRawEvent(w, spec, "tool_call_start")
 	if spec.InputError {
 		w.ToolArgs(toolCallID, jsonToolInput(input), nil)
@@ -1062,7 +1063,7 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 		}
 		w.ToolApprovalInputComplete(toolCallID, spec.Name, input)
 		annotateProviderRawEvent(w, spec, "tool_call_input_complete")
-		w.ToolApprovalRequested(toolCallID, spec.Name, input, *approval)
+		w.ToolApprovalRequestedWithMetadata(toolCallID, spec.Name, input, *approval, displayMetadata)
 		annotateProviderRawEvent(w, spec, "approval_requested")
 		return errApprovalRequested
 	case spec.Deny:
@@ -1079,48 +1080,50 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 }
 
 func toolDisplayMetadata(name string) map[string]any {
-	displayName := titleToolName(name)
-	metadata := map[string]any{
-		"displayName": displayName,
+	type ToolProviderMetadata struct {
+		ID          string `json:"id,omitempty"`
+		DisplayName string `json:"displayName,omitempty"`
+		IconURL     string `json:"iconUrl,omitempty"`
 	}
+	type ToolDisplayMetadata struct {
+		DisplayName string                `json:"displayName,omitempty"`
+		Description string                `json:"description,omitempty"`
+		IconURL     string                `json:"iconUrl,omitempty"`
+		Provider    *ToolProviderMetadata `json:"provider,omitempty"`
+	}
+
+	metadata := ToolDisplayMetadata{}
 	switch strings.ToLower(name) {
 	case "calendar.get_events", "google_calendar.get_events", "google-calendar.get-events":
-		metadata["displayName"] = "List Calendar Events"
-		metadata["iconId"] = "3257-5951"
-		metadata["provider"] = map[string]any{
-			"id":          "google-calendar",
-			"displayName": "Google Calendar",
-			"iconId":      "3257-5951",
+		metadata.DisplayName = "List Calendar Events"
+		metadata.Provider = &ToolProviderMetadata{
+			ID:          "google-calendar",
+			DisplayName: "Google Calendar",
 		}
 	case "linear.list_issues", "linear.list-issues", "list_issues", "list-issues":
-		metadata["displayName"] = "List Issues"
-		metadata["iconId"] = "3257-5945"
-		metadata["provider"] = map[string]any{
-			"id":          "linear",
-			"displayName": "Linear",
-			"iconId":      "3257-5945",
+		metadata.DisplayName = "List Issues"
+		metadata.Provider = &ToolProviderMetadata{
+			ID:          "linear",
+			DisplayName: "Linear",
 		}
 	case "shell":
-		metadata["displayName"] = "Run Command"
-		metadata["iconId"] = "3255-2310"
+		metadata.DisplayName = "Run Command"
 	case "fetch":
-		metadata["displayName"] = "Fetch Web"
-		metadata["iconId"] = "source-placeholder"
+		metadata.DisplayName = "Fetch Web"
 	}
-	return metadata
+	return compactJSONMap(metadata)
 }
 
-func titleToolName(name string) string {
-	parts := strings.FieldsFunc(name, func(r rune) bool {
-		return r == '_' || r == '-' || r == '.'
-	})
-	for i, part := range parts {
-		if part == "" {
-			continue
-		}
-		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+func compactJSONMap(value any) map[string]any {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil
 	}
-	return strings.Join(parts, " ")
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil || len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func approvalIDForRun(runID, toolCallID string) string {

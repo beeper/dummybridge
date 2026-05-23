@@ -234,10 +234,16 @@ func (w *Writer) ToolStartWithMetadata(toolCallID, name string, index int, appro
 }
 
 func (w *Writer) ToolApprovalRequested(toolCallID, name string, input any, approval agui.ToolApproval) {
+	w.ToolApprovalRequestedWithMetadata(toolCallID, name, input, approval, nil)
+}
+
+func (w *Writer) ToolApprovalRequestedWithMetadata(toolCallID, name string, input any, approval agui.ToolApproval, metadata map[string]any) {
 	w.recordApprovalRequest(toolCallID, name, &approval)
+	value := NewApprovalRequestedValue(*w.Run, toolCallID, name, input, approval)
+	value.Metadata = metadata
 	w.Add(w.builder.Custom(
 		agui.ApprovalCustomRequested,
-		NewApprovalRequestedValue(*w.Run, toolCallID, name, input, approval).Map(),
+		value.Map(),
 	))
 }
 
@@ -302,6 +308,7 @@ func (w *Writer) ToolApprovalResponded(toolCallID, name string, input any, respo
 	}
 	if response.Approved {
 		result["state"] = agui.ToolResultStateComplete
+		result["status"] = "success"
 		result["approved"] = true
 	} else {
 		reason := response.Reason
@@ -309,6 +316,7 @@ func (w *Writer) ToolApprovalResponded(toolCallID, name string, input any, respo
 			reason = "denied"
 		}
 		result["state"] = agui.ToolResultStateError
+		result["status"] = "denied"
 		result["reason"] = reason
 	}
 	w.Add(w.builder.ToolCallEnd(toolCallID, name, input, jsonString(result), agui.ToolStateApprovalResponded))
@@ -321,6 +329,7 @@ func (w *Writer) ToolResult(toolCallID, content, state string) {
 func (w *Writer) ToolError(toolCallID, name string, input any, reason string) {
 	w.Add(w.builder.ToolCallEnd(toolCallID, name, input, jsonString(map[string]any{
 		"state":  agui.ToolResultStateError,
+		"status": "failed",
 		"reason": reason,
 	}), agui.ToolStateInputComplete))
 }
@@ -340,7 +349,8 @@ func (w *Writer) ToolDenied(toolCallID, name string, input any, approvalID, reas
 	}))
 	w.Add(w.builder.ToolCallEnd(toolCallID, name, input, jsonString(map[string]any{
 		"state":  agui.ToolResultStateError,
-		"reason": "denied",
+		"status": "denied",
+		"reason": reason,
 	}), agui.ToolStateApprovalResponded))
 }
 

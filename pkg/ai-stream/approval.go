@@ -13,10 +13,11 @@ const (
 )
 
 type ApprovalChoice struct {
-	Key   string `json:"key"`
-	Label string `json:"label"`
-	Alias string `json:"alias"`
-	Style string `json:"style,omitempty"`
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Alias    string `json:"alias"`
+	Style    string `json:"style,omitempty"`
+	Shortcut string `json:"shortcut,omitempty"`
 }
 
 type ApprovalCleanup struct {
@@ -67,6 +68,7 @@ type ApprovalRequestedValue struct {
 	ApprovalMessageID string
 	ApprovalEventID   string
 	Choices           []ApprovalChoice
+	Metadata          map[string]any
 }
 
 type ApprovalNotice struct {
@@ -120,6 +122,9 @@ func (v ApprovalRequestedValue) Map() map[string]any {
 	if v.ApprovalEventID != "" {
 		value["approvalEventId"] = v.ApprovalEventID
 	}
+	if len(v.Metadata) > 0 {
+		value["metadata"] = v.Metadata
+	}
 	return value
 }
 
@@ -145,6 +150,9 @@ func ApprovalChoicesAsAny(choices []ApprovalChoice) []any {
 		}
 		if choice.Style != "" {
 			item["style"] = choice.Style
+		}
+		if choice.Shortcut != "" {
+			item["shortcut"] = choice.Shortcut
 		}
 		out = append(out, item)
 	}
