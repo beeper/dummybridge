@@ -163,7 +163,7 @@ func virtualAIRuntime(now time.Time) aiRuntime {
 }
 
 func buildAIRun(ctx context.Context, runID, threadID, input string, now time.Time) (*aistream.Run, error) {
-	plans, err := buildAIRunPlans(ctx, runID, threadID, input, now)
+	plans, err := buildAIRunPlans(ctx, runID, threadID, input, now, "ai", "AI")
 	if err != nil {
 		return nil, err
 	}
@@ -173,10 +173,10 @@ func buildAIRun(ctx context.Context, runID, threadID, input string, now time.Tim
 	return plans[0].Run, nil
 }
 
-func buildAIRunPlans(ctx context.Context, runID, threadID, input string, now time.Time) ([]aiRunPlan, error) {
+func buildAIRunPlans(ctx context.Context, runID, threadID, input string, now time.Time, agentID, agentName string) ([]aiRunPlan, error) {
 	cmd, err := parseCommand(input)
 	if err != nil {
-		run := aistream.NewRun(runID, threadID, aistream.DefaultModel, string(aiGhostID), aiGhostName, now)
+		run := aistream.NewRun(runID, threadID, aistream.DefaultModel, agentID, agentName, now)
 		writer := aistream.NewWriter(run, func() time.Time { return now })
 		writer.Start()
 		writer.Text(err.Error() + "\n\n" + helpText())
@@ -184,18 +184,18 @@ func buildAIRunPlans(ctx context.Context, runID, threadID, input string, now tim
 		return []aiRunPlan{{Run: run}}, nil
 	}
 	if cmd != nil && cmd.Chaos != nil {
-		return buildAIChaosRunPlans(ctx, runID, threadID, now, *cmd.Chaos)
+		return buildAIChaosRunPlans(ctx, runID, threadID, now, *cmd.Chaos, agentID, agentName)
 	}
-	run, err := buildAIRunFromCommand(ctx, runID, threadID, now, cmd)
+	run, err := buildAIRunFromCommand(ctx, runID, threadID, now, cmd, agentID, agentName)
 	if err != nil {
 		return nil, err
 	}
 	return []aiRunPlan{{Run: run}}, nil
 }
 
-func buildAIRunFromCommand(ctx context.Context, runID, threadID string, now time.Time, cmd *parsedCommand) (*aistream.Run, error) {
+func buildAIRunFromCommand(ctx context.Context, runID, threadID string, now time.Time, cmd *parsedCommand, agentID, agentName string) (*aistream.Run, error) {
 	runtime := virtualAIRuntime(now)
-	run := aistream.NewRun(runID, threadID, aistream.DefaultModel, string(aiGhostID), aiGhostName, now)
+	run := aistream.NewRun(runID, threadID, aistream.DefaultModel, agentID, agentName, now)
 	writer := aistream.NewWriter(run, runtime.now)
 	writer.Start()
 
@@ -223,7 +223,7 @@ func buildAIRunFromCommand(ctx context.Context, runID, threadID string, now time
 	return run, nil
 }
 
-func buildAIChaosRunPlans(ctx context.Context, baseRunID, threadID string, now time.Time, cmd chaosCommand) ([]aiRunPlan, error) {
+func buildAIChaosRunPlans(ctx context.Context, baseRunID, threadID string, now time.Time, cmd chaosCommand, agentID, agentName string) ([]aiRunPlan, error) {
 	seed := cmd.Seed
 	if !cmd.SeedSet {
 		seed = now.UnixNano()
@@ -255,7 +255,7 @@ func buildAIChaosRunPlans(ctx context.Context, baseRunID, threadID string, now t
 		run, err := buildAIRunFromCommand(ctx, runID, threadID, now.Add(delay), &parsedCommand{
 			Name:   "stream-random",
 			Random: &randomCmd,
-		})
+		}, agentID, agentName)
 		if err != nil {
 			return nil, err
 		}

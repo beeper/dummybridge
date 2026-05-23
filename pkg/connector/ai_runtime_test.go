@@ -379,7 +379,7 @@ func TestBuildAIRunOver64KBPacksTo58KCarriers(t *testing.T) {
 }
 
 func TestBuildAIRunPlansChaosCreatesMultipleRuns(t *testing.T) {
-	plans, err := buildAIRunPlans(context.Background(), "run-chaos", "thread-1", "stream-chaos 3 1 --max-actions=3 --seed=7 --stagger-ms=1:1", time.Unix(10, 0))
+	plans, err := buildAIRunPlans(context.Background(), "run-chaos", "thread-1", "stream-chaos 3 1 --max-actions=3 --seed=7 --stagger-ms=1:1", time.Unix(10, 0), "ai", "AI")
 	if err != nil {
 		t.Fatal(err)
 	}

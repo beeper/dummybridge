@@ -8,6 +8,7 @@ import (
 
 	"github.com/beeper/dummybridge/pkg/ag-ui"
 	"github.com/beeper/dummybridge/pkg/ai-stream"
+	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
@@ -41,6 +42,42 @@ func TestGetRemoteEchoBehavior(t *testing.T) {
 				t.Fatalf("fail = %v, want %v", got.fail, tc.fail)
 			}
 		})
+	}
+}
+
+func TestAIDemoCommandContentOnlyMatchesExplicitDemoCommands(t *testing.T) {
+	for _, body := range []string{
+		"help",
+		"/help",
+		"!help",
+		"dummybridge help",
+		"stream-lorem 100",
+		"stream-tools 100 shell",
+		"stream-random 1",
+		"stream-chaos 2 1",
+	} {
+		if !isAIDemoCommandContent(&event.MessageEventContent{Body: body}) {
+			t.Fatalf("expected AI demo command for %q", body)
+		}
+	}
+	for _, body := range []string{
+		"",
+		"hello",
+		"dummybridge",
+		"remote-echo delay 1s",
+	} {
+		if isAIDemoCommandContent(&event.MessageEventContent{Body: body}) {
+			t.Fatalf("did not expect AI demo command for %q", body)
+		}
+	}
+}
+
+func TestDummyAISenderForPortalSupportsDedicatedAndNormalRooms(t *testing.T) {
+	if got := dummyAISenderForPortal(&bridgev2.Portal{Portal: &database.Portal{PortalKey: networkid.PortalKey{ID: "ai-room"}}}); got != aiGhostID {
+		t.Fatalf("AI portal sender = %q, want %q", got, aiGhostID)
+	}
+	if got := dummyAISenderForPortal(&bridgev2.Portal{Portal: &database.Portal{PortalKey: networkid.PortalKey{ID: "normal-room"}}}); got != stablePortalUserIDByIndex("normal-room", 0) {
+		t.Fatalf("normal portal sender = %q", got)
 	}
 }
 
