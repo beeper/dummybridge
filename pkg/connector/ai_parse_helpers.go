@@ -49,10 +49,6 @@ func parseNonNegativeInt(raw, label string) (int, error) {
 	return n, nil
 }
 
-func parseDurationRangeMS(value string, hasValue bool, token string) (time.Duration, time.Duration, error) {
-	return parseDurationRange(value, hasValue, token, "delay-ms", maxDemoDelay)
-}
-
 func parseDurationRange(value string, hasValue bool, token, label string, maxValue time.Duration) (time.Duration, time.Duration, error) {
 	minValue, maxRange, err := parseIntRangeOption(value, hasValue, token, label, int(maxValue/time.Millisecond))
 	if err != nil {

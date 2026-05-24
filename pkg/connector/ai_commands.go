@@ -169,7 +169,7 @@ func parseStreamLikeCommand(tokens []string, cmd *randomCommand, deriveActions b
 			}
 			cmd.Chars = n
 		case "delay-ms":
-			minDelay, maxDelay, err := parseDurationRangeMS(value, hasValue, token)
+			minDelay, maxDelay, err := parseDurationRange(value, hasValue, token, "delay-ms", maxDemoDelay)
 			if err != nil {
 				return nil, err
 			}
@@ -323,7 +323,7 @@ func parseCommonOptions(tokens []string) (commonCommandOptions, error) {
 			}
 			opts.DataTransientName = value
 		case "delay-ms":
-			minDelay, maxDelay, err := parseDurationRangeMS(value, hasValue, token)
+			minDelay, maxDelay, err := parseDurationRange(value, hasValue, token, "delay-ms", maxDemoDelay)
 			if err != nil {
 				return opts, err
 			}

@@ -228,10 +228,10 @@ func TestApprovalPromptSeqStartsAtNextPackedCarrierSeq(t *testing.T) {
 		AgentName:   run.AgentName,
 		SeqStart:    prompt.SeqStart,
 	}
-	continuation, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+	continuation, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
 		ID:       prompt.ID,
 		Approved: true,
-	}, time.Unix(20, 0))
+	}}, time.Unix(20, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,10 +321,10 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 		t.Fatalf("approval-requested stream event has bad choice shape: %#v", choices[0])
 	}
 
-	continuation, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+	continuation, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
 		ID:       prompt.ID,
 		Approved: true,
-	}, time.Unix(20, 0))
+	}}, time.Unix(20, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,10 +361,10 @@ func TestApprovalContinuationResumesOriginalRunAfterApprovedTool(t *testing.T) {
 		AgentName:   "AI",
 		SeqStart:    12,
 	}
-	run, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+	run, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
 		ID:       approvalCtx.ID,
 		Approved: true,
-	}, time.Unix(20, 0))
+	}}, time.Unix(20, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,11 +420,11 @@ func TestApprovalContinuationStopsOriginalRunAfterDeniedTool(t *testing.T) {
 		AgentName:   "AI",
 		SeqStart:    12,
 	}
-	run, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+	run, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
 		ID:       approvalCtx.ID,
 		Approved: false,
 		Reason:   "denied",
-	}, time.Unix(20, 0))
+	}}, time.Unix(20, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -916,10 +916,10 @@ func TestMultiApprovalContinuationKeepsLaterPrompts(t *testing.T) {
 		AgentName:   "AI",
 		SeqStart:    12,
 	}
-	run, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+	run, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
 		ID:       approvalCtx.ID,
 		Approved: true,
-	}, time.Unix(20, 0))
+	}}, time.Unix(20, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1000,10 +1000,10 @@ func TestApprovalContinuationReplaysRandomRunWithImplicitSeed(t *testing.T) {
 			AgentName:   "AI",
 			SeqStart:    50,
 		}
-		continuation, err := buildAIApprovalContinuationRun(context.Background(), approvalCtx, agui.ToolApprovalResponse{
+		continuation, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
 			ID:       approvalCtx.ID,
 			Approved: true,
-		}, now.Add(time.Hour))
+		}}, now.Add(time.Hour))
 		if err != nil {
 			t.Fatalf("continuation failed: %v", err)
 		}

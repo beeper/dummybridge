@@ -966,15 +966,6 @@ func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *brid
 		Msg("Queued AI approval continuation")
 }
 
-func buildAIApprovalContinuationRun(ctx context.Context, approvalCtx aistream.ApprovalContext, response agui.ToolApprovalResponse, now time.Time) (aistream.Run, error) {
-	if response.ID == "" {
-		response.ID = approvalCtx.ID
-	}
-	return buildAIApprovalContinuationRunWithApprovals(ctx, approvalCtx, map[string]agui.ToolApprovalResponse{
-		response.ID: response,
-	}, now)
-}
-
 func buildAIApprovalContinuationRunWithApprovals(ctx context.Context, approvalCtx aistream.ApprovalContext, approvals map[string]agui.ToolApprovalResponse, now time.Time) (aistream.Run, error) {
 	cmd, err := parseCommand(approvalCtx.Command)
 	if err != nil {

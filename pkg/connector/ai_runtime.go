@@ -55,7 +55,7 @@ func buildAIRunPlans(ctx context.Context, runID, threadID, input string, now tim
 	if cmd != nil && cmd.Random != nil && cmd.Random.Runs > 1 {
 		return buildAIStreamRunPlans(ctx, runID, threadID, now, *cmd.Random, agentID, agentName)
 	}
-	run, err := buildAIRunFromCommand(ctx, runID, threadID, now, cmd, agentID, agentName)
+	run, err := buildAIRunFromCommandWithApprovals(ctx, runID, threadID, now, cmd, agentID, agentName, nil)
 	if err != nil {
 		return nil, err
 	}

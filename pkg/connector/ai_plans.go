@@ -67,10 +67,6 @@ func hasSeedFlag(input string) bool {
 	return false
 }
 
-func buildAIRunFromCommand(ctx context.Context, runID, threadID string, now time.Time, cmd *parsedCommand, agentID, agentName string) (*aistream.Run, error) {
-	return buildAIRunFromCommandWithApprovals(ctx, runID, threadID, now, cmd, agentID, agentName, nil)
-}
-
 func buildAIRunFromCommandWithApprovals(ctx context.Context, runID, threadID string, now time.Time, cmd *parsedCommand, agentID, agentName string, approvals map[string]agui.ToolApprovalResponse) (*aistream.Run, error) {
 	runtime := virtualAIRuntime(now)
 	run := aistream.NewRun(runID, threadID, aistream.DefaultModel, agentID, agentName, now)
@@ -131,14 +127,14 @@ func buildAIChaosRunPlans(ctx context.Context, baseRunID, threadID string, now t
 			},
 		}
 		parsed := &parsedCommand{Name: "stream", Random: &randomCmd}
-		run, err := buildAIRunFromCommand(ctx, runID, threadID, now.Add(delay), parsed, agentID, agentName)
+		run, err := buildAIRunFromCommandWithApprovals(ctx, runID, threadID, now.Add(delay), parsed, agentID, agentName, nil)
 		if err != nil {
 			return nil, err
 		}
 		plans = append(plans, aiRunPlan{
 			Run:              run,
 			Delay:            delay,
-			EffectiveCommand: chaosSubRunCommand(randomCmd),
+			EffectiveCommand: streamSubRunCommand(randomCmd),
 		})
 	}
 	return plans, nil
@@ -162,7 +158,7 @@ func buildAIStreamRunPlans(ctx context.Context, baseRunID, threadID string, now 
 		child.Seed = seed + int64(i+1)*97
 		child.SeedSet = true
 		parsed := &parsedCommand{Name: "stream", Random: &child}
-		run, err := buildAIRunFromCommand(ctx, fmt.Sprintf("%s-%d", baseRunID, i+1), threadID, now.Add(delay), parsed, agentID, agentName)
+		run, err := buildAIRunFromCommandWithApprovals(ctx, fmt.Sprintf("%s-%d", baseRunID, i+1), threadID, now.Add(delay), parsed, agentID, agentName, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -173,10 +169,6 @@ func buildAIStreamRunPlans(ctx context.Context, baseRunID, threadID string, now 
 		})
 	}
 	return plans, nil
-}
-
-func chaosSubRunCommand(cmd randomCommand) string {
-	return streamSubRunCommand(cmd)
 }
 
 func streamSubRunCommand(cmd randomCommand) string {
