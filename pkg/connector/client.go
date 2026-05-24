@@ -632,7 +632,6 @@ func (dc *DummyClient) queueAIRunStreamAndMetadata(portal *bridgev2.Portal, send
 // known, and finally emits the carriers and (if the run terminated) the
 // final metadata edit.
 func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid.UserID, messageID networkid.MessageID, targetEventID id.EventID, run aistream.Run, command string, startSeq int, anchorAt time.Time) {
-	dc.ensureAIRunSession(run.RunID)
 	sizingRun := run
 	annotateApprovalEventIDs(&sizingRun, approvalEventIDPlaceholders(sizingRun.Prompts))
 	carriers, err := aistream.PackRunFromSeq(sizingRun, string(targetEventID), aistream.CarrierBudgetBytes, startSeq)
