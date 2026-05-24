@@ -47,17 +47,13 @@ type aiRunSession struct {
 
 var _ bridgev2.NetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.IdentifierResolvingNetworkAPI = (*DummyClient)(nil)
-var _ bridgev2.ContactListingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.BackfillingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.DeleteChatHandlingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.MessageRequestAcceptingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.ReactionHandlingNetworkAPI = (*DummyClient)(nil)
 
 const (
-	aiGhostID        networkid.UserID = "ai"
-	aiGhostName      string           = "AI"
-	aiPortalIDPrefix string           = "ai-"
-	dummyAIAgentName string           = "Dummy"
+	dummyAIAgentName string = "Dummy"
 )
 
 var delayedRemoteEchoPattern = regexp.MustCompile(`(?i)^remote-echo\s+delay\s+([0-9]+(?:ms|s|m|h))$`)
@@ -149,14 +145,6 @@ func (dc *DummyClient) IsThisUser(ctx context.Context, userID networkid.UserID) 
 }
 
 func (dc *DummyClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
-	if isAIPortalID(portal.ID) {
-		roomType := database.RoomTypeDM
-		return &bridgev2.ChatInfo{
-			Name: ptr.Ptr(aiGhostName),
-			Type: ptr.Ptr(roomType),
-		}, nil
-	}
-
 	portalIDPrefix := string(portal.ID)
 	if len(portalIDPrefix) > 6 {
 		portalIDPrefix = portalIDPrefix[:6]
@@ -183,17 +171,6 @@ func (dc *DummyClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal)
 }
 
 func (tc *DummyClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*bridgev2.UserInfo, error) {
-	if ghost.ID == aiGhostID {
-		name := aiGhostName
-		isBot := true
-		ghost.UpdateName(ctx, name)
-		return &bridgev2.UserInfo{
-			Identifiers: []string{string(aiGhostID), "AI"},
-			Name:        &name,
-			IsBot:       &isBot,
-		}, nil
-	}
-
 	name := ghost.Name
 	if name == "" {
 		name = string(ghost.ID)
@@ -248,10 +225,6 @@ func (dc *DummyClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 			Timestamp: timestamp,
 		},
 		StreamOrder: time.Now().UnixNano(),
-	}
-
-	if msg.Portal != nil && (isAIPortalID(msg.Portal.ID) || isAIDemoCommandContent(msg.Content)) {
-		dc.queueAIResponse(ctx, msg.Portal, msg.Content)
 	}
 
 	return resp, nil
@@ -442,28 +415,6 @@ func getRemoteEchoBehavior(content *event.MessageEventContent) remoteEchoBehavio
 	return remoteEchoBehavior{pending: true, delay: delay}
 }
 
-func isAIDemoCommandContent(content *event.MessageEventContent) bool {
-	if content == nil {
-		return false
-	}
-	body := strings.TrimSpace(content.Body)
-	tokens := strings.Fields(body)
-	if len(tokens) == 0 {
-		return false
-	}
-	switch strings.ToLower(tokens[0]) {
-	case "help", "/help", "!help":
-		return true
-	case "stream", "stream-tools":
-		_, err := parseCommand(body)
-		return err == nil
-	case "dummybridge":
-		return len(tokens) > 1 && strings.EqualFold(tokens[1], "help")
-	default:
-		return false
-	}
-}
-
 // ensureAISenderInvited queues a ChatInfoChange that adds the AI sender ghost
 // to the given portal. The bridge's default portal generator can create
 // portals with members=0, in which case the per-portal AI sender chosen by
@@ -472,9 +423,6 @@ func isAIDemoCommandContent(content *event.MessageEventContent) bool {
 // a no-op for bridgev2, so it is safe to call for every AI run.
 func (dc *DummyClient) ensureAISenderInvited(portal *bridgev2.Portal, sender networkid.UserID) {
 	if dc == nil || dc.UserLogin == nil || portal == nil || sender == "" {
-		return
-	}
-	if isAIPortalID(portal.ID) {
 		return
 	}
 	changes := &bridgev2.ChatMemberList{MemberMap: bridgev2.ChatMemberMap{}}
@@ -502,16 +450,10 @@ func dummyAISenderForPortal(portal *bridgev2.Portal) networkid.UserID {
 	if portal == nil {
 		return networkid.UserID(dummyAIAgentName)
 	}
-	if isAIPortalID(portal.ID) {
-		return aiGhostID
-	}
 	return stablePortalUserIDByIndex(portal.ID, 0)
 }
 
 func dummyAIAgentNameForPortal(portal *bridgev2.Portal) string {
-	if portal != nil && isAIPortalID(portal.ID) {
-		return aiGhostName
-	}
 	return dummyAIAgentName
 }
 
@@ -1204,10 +1146,6 @@ func (dc *DummyClient) HandleMatrixAcceptMessageRequest(ctx context.Context, msg
 }
 
 func (dc *DummyClient) ResolveIdentifier(ctx context.Context, identifier string, createChat bool) (*bridgev2.ResolveIdentifierResponse, error) {
-	if isAIIdentifier(identifier) {
-		return dc.resolveAIIdentifier(ctx, createChat)
-	}
-
 	userID := networkid.UserID(identifier)
 	portalID := randomPortalID()
 	portalKey := networkid.PortalKey{
@@ -1255,82 +1193,4 @@ func (dc *DummyClient) ResolveIdentifier(ctx context.Context, identifier string,
 		},
 	}, nil
 
-}
-
-func (dc *DummyClient) GetContactList(ctx context.Context) ([]*bridgev2.ResolveIdentifierResponse, error) {
-	contact, err := dc.resolveAIIdentifier(ctx, false)
-	if err != nil {
-		return nil, err
-	}
-	return []*bridgev2.ResolveIdentifierResponse{contact}, nil
-}
-
-func (dc *DummyClient) resolveAIIdentifier(ctx context.Context, createChat bool) (*bridgev2.ResolveIdentifierResponse, error) {
-	ghost, err := dc.UserLogin.Bridge.GetGhostByID(ctx, aiGhostID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get AI ghost: %w", err)
-	}
-	userInfo, _ := dc.GetUserInfo(ctx, ghost)
-	response := &bridgev2.ResolveIdentifierResponse{
-		Ghost:    ghost,
-		UserID:   aiGhostID,
-		UserInfo: userInfo,
-	}
-	if !createChat {
-		return response, nil
-	}
-
-	portalID := networkid.PortalID(aiPortalIDPrefix + string(randomPortalID()))
-	portalKey := networkid.PortalKey{ID: portalID, Receiver: dc.UserLogin.ID}
-	portal, err := dc.UserLogin.Bridge.GetPortalByKey(ctx, portalKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get AI portal: %w", err)
-	}
-	roomType := database.RoomTypeDM
-	response.Chat = &bridgev2.CreateChatResponse{
-		Portal:    portal,
-		PortalKey: portalKey,
-		PortalInfo: &bridgev2.ChatInfo{
-			Name:        ptr.Ptr(aiGhostName),
-			Topic:       ptr.Ptr("DummyBridge AI chat"),
-			Type:        ptr.Ptr(roomType),
-			CanBackfill: true,
-			Members: &bridgev2.ChatMemberList{
-				MemberMap: bridgev2.ChatMemberMap{
-					networkid.UserID(dc.UserLogin.ID): {
-						EventSender: bridgev2.EventSender{
-							IsFromMe: true,
-							Sender:   networkid.UserID(dc.UserLogin.ID),
-						},
-						Membership: event.MembershipJoin,
-						PowerLevel: ptr.Ptr(100),
-					},
-					aiGhostID: {
-						EventSender: bridgev2.EventSender{
-							Sender: aiGhostID,
-						},
-						Membership: event.MembershipJoin,
-						PowerLevel: ptr.Ptr(50),
-						MemberEventExtra: map[string]any{
-							"displayname":             aiGhostName,
-							"com.beeper.ai.agent":     string(aiGhostID),
-							"com.beeper.ai.model_id":  aistream.DefaultModel,
-							"com.beeper.ai.protocol":  "ag-ui",
-							"com.beeper.ai.static_ai": true,
-						},
-					},
-				},
-			},
-		},
-	}
-	return response, nil
-}
-
-func isAIIdentifier(identifier string) bool {
-	identifier = strings.TrimSpace(identifier)
-	return strings.EqualFold(identifier, string(aiGhostID)) || strings.EqualFold(identifier, aiGhostName)
-}
-
-func isAIPortalID(portalID networkid.PortalID) bool {
-	return strings.HasPrefix(string(portalID), aiPortalIDPrefix)
 }

@@ -49,7 +49,6 @@ func (dc *DummyConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities
 			ResolveIdentifier: bridgev2.ResolveIdentifierCapabilities{
 				CreateDM:       true,
 				LookupUsername: true,
-				ContactList:    true,
 			},
 		},
 	}
