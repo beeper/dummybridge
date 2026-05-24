@@ -1235,8 +1235,8 @@ func (dc *DummyClient) ResolveIdentifier(ctx context.Context, identifier string,
 	ghostInfo, _ := dc.GetUserInfo(ctx, ghost)
 	portalInfo, _ := dc.GetChatInfo(ctx, portal)
 	portalInfo.Members = &bridgev2.ChatMemberList{
-		Members: []bridgev2.ChatMember{
-			{
+		MemberMap: bridgev2.ChatMemberMap{
+			networkid.UserID(dc.UserLogin.ID): {
 				EventSender: bridgev2.EventSender{
 					IsFromMe: true,
 					Sender:   networkid.UserID(dc.UserLogin.ID),
@@ -1244,7 +1244,7 @@ func (dc *DummyClient) ResolveIdentifier(ctx context.Context, identifier string,
 				Membership: event.MembershipJoin,
 				PowerLevel: ptr.Ptr(50),
 			},
-			{
+			userID: {
 				EventSender: bridgev2.EventSender{
 					Sender: userID,
 				},
