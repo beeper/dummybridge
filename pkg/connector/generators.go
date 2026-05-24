@@ -58,8 +58,8 @@ func generatePortal(ctx context.Context, br *bridgev2.Bridge, login *bridgev2.Us
 		Type:        ptr.Ptr(roomType),
 		CanBackfill: true,
 		Members: &bridgev2.ChatMemberList{
-			Members: []bridgev2.ChatMember{
-				{
+			MemberMap: bridgev2.ChatMemberMap{
+				networkid.UserID(login.ID): {
 					EventSender: bridgev2.EventSender{
 						IsFromMe: true,
 						Sender:   networkid.UserID(login.ID),
@@ -78,7 +78,7 @@ func generatePortal(ctx context.Context, br *bridgev2.Bridge, login *bridgev2.Us
 			return nil, fmt.Errorf("failed to get ghost by id: %w", err)
 		}
 
-		chatInfo.Members.Members = append(chatInfo.Members.Members, bridgev2.ChatMember{
+		chatInfo.Members.MemberMap.Set(bridgev2.ChatMember{
 			EventSender: bridgev2.EventSender{
 				Sender: userID,
 			},

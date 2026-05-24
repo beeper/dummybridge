@@ -29,6 +29,9 @@ var AllCommands = []commands.CommandHandler{
 	MessagesCommand,
 	KickMeCommand,
 	FileCommand,
+	StreamCommand,
+	StreamToolsCommand,
+	StreamHelpCommand,
 	CatCommand,
 	CatAvatarCommand,
 }
@@ -226,8 +229,7 @@ var FileCommand = &commands.FullHandler{
 	Func: func(e *commands.Event) {
 		e.Reply("Generating file event in this room")
 
-		var mediaData []byte
-		mediaData = []byte("Test text file")
+		mediaData := []byte("Test text file")
 		mediaName := "test.txt"
 		mediaMime := "text/plain"
 
@@ -261,6 +263,67 @@ var FileCommand = &commands.FullHandler{
 	Name: "file",
 	Help: commands.HelpMeta{
 		Description: "Create boring file events in room",
+		Section:     DummyHelpsection,
+	},
+}
+
+func runStreamCommand(e *commands.Event, name string) {
+	if e.Portal == nil {
+		e.Reply("Can only stream within a portal")
+		return
+	}
+	login := e.User.GetDefaultLogin()
+	if login == nil {
+		e.Reply("No login")
+		return
+	}
+	client, ok := login.Client.(*DummyClient)
+	if !ok || client == nil {
+		e.Reply("Default login is not a dummybridge login")
+		return
+	}
+	body := strings.TrimSpace(name + " " + e.RawArgs)
+	if _, err := parseCommand(body); err != nil {
+		e.Reply(err.Error())
+		return
+	}
+	client.queueAIResponse(e.Ctx, e.Portal, &event.MessageEventContent{Body: body})
+	e.Reply("Started %s", name)
+}
+
+var StreamCommand = &commands.FullHandler{
+	Func: func(e *commands.Event) {
+		runStreamCommand(e, "stream")
+	},
+	Name: "stream",
+	Help: commands.HelpMeta{
+		Description: "Generate a random streamed AI event sequence",
+		Args:        "[seconds] [--runs=N] [--profile=balanced|tools|errors|artifacts] [--seed=N] [--chars=N] [--terminal=stop|length|abort|error] [--delay-ms=min:max] [--stagger-ms=min:max] [--actions=N] [--no-approval] [--allow-abort] [--allow-error]",
+		Section:     DummyHelpsection,
+	},
+	RequiresLogin: true,
+}
+
+var StreamToolsCommand = &commands.FullHandler{
+	Func: func(e *commands.Event) {
+		runStreamCommand(e, "stream-tools")
+	},
+	Name: "stream-tools",
+	Help: commands.HelpMeta{
+		Description: "Generate a streamed AI event sequence with explicit tool calls",
+		Args:        "<chars> <tool[#fail|#approval|#deny|#delta|#inputerror|#prelim|#provider]>... [common options]",
+		Section:     DummyHelpsection,
+	},
+	RequiresLogin: true,
+}
+
+var StreamHelpCommand = &commands.FullHandler{
+	Func: func(e *commands.Event) {
+		e.Reply(helpText())
+	},
+	Name: "stream-help",
+	Help: commands.HelpMeta{
+		Description: "Show stream command examples",
 		Section:     DummyHelpsection,
 	},
 }
