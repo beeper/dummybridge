@@ -446,13 +446,17 @@ func isAIDemoCommandContent(content *event.MessageEventContent) bool {
 	if content == nil {
 		return false
 	}
-	tokens := strings.Fields(strings.TrimSpace(content.Body))
+	body := strings.TrimSpace(content.Body)
+	tokens := strings.Fields(body)
 	if len(tokens) == 0 {
 		return false
 	}
 	switch strings.ToLower(tokens[0]) {
-	case "help", "/help", "!help", "stream", "stream-tools":
+	case "help", "/help", "!help":
 		return true
+	case "stream", "stream-tools":
+		_, err := parseCommand(body)
+		return err == nil
 	case "dummybridge":
 		return len(tokens) > 1 && strings.EqualFold(tokens[1], "help")
 	default:
