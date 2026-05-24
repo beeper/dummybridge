@@ -632,7 +632,9 @@ func (dc *DummyClient) queueAIRunStreamAndMetadata(portal *bridgev2.Portal, send
 // final metadata edit.
 func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid.UserID, messageID networkid.MessageID, targetEventID id.EventID, run aistream.Run, command string, startSeq int, anchorAt time.Time) {
 	dc.ensureAIRunSession(run.RunID)
-	carriers, err := aistream.PackRunFromSeq(run, string(targetEventID), aistream.CarrierBudgetBytes, startSeq)
+	sizingRun := run
+	annotateApprovalEventIDs(&sizingRun, approvalEventIDPlaceholders(sizingRun.Prompts))
+	carriers, err := aistream.PackRunFromSeq(sizingRun, string(targetEventID), aistream.CarrierBudgetBytes, startSeq)
 	if err != nil {
 		log.Warn().Err(err).Str("run_id", run.RunID).Msg("Failed to pack AI stream")
 		return
@@ -640,8 +642,14 @@ func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid
 	carriers = splitCarriersForTimedEmission(carriers)
 	nextSeq := aistream.NextSeq(carriers)
 	approvalEventIDs := make(map[string]id.EventID, len(run.Prompts))
-	for i, prompt := range run.Prompts {
-		prompt.SeqStart = nextSeq + i*aistream.ApprovalSeqReservation
+	if len(run.Prompts) > 1 {
+		log.Warn().
+			Str("run_id", run.RunID).
+			Int("approval_prompts", len(run.Prompts)).
+			Msg("AI run produced multiple simultaneous approval prompts; using the same continuation sequence")
+	}
+	for _, prompt := range run.Prompts {
+		prompt.SeqStart = nextSeq
 		ctx := dc.queueAIApprovalPrompt(portal, sender, run, prompt, targetEventID, command, time.Now())
 		if approvalEventID := dc.waitForMessageMXID(portal, networkid.MessageID(ctx.ID), 10*time.Second); approvalEventID != "" {
 			approvalEventIDs[ctx.ID] = approvalEventID
@@ -667,6 +675,19 @@ func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid
 			return
 		}
 		carriers = splitCarriersForTimedEmission(carriers)
+		if actualNextSeq := aistream.NextSeq(carriers); actualNextSeq != nextSeq {
+			log.Warn().
+				Str("run_id", run.RunID).
+				Int("expected_next_seq", nextSeq).
+				Int("actual_next_seq", actualNextSeq).
+				Msg("AI approval event ID repack changed stream sequence count")
+			return
+		}
+	} else if len(run.Prompts) > 0 {
+		log.Info().
+			Str("run_id", run.RunID).
+			Int("approval_prompts", len(run.Prompts)).
+			Msg("Sending approval stream without approval event IDs")
 	}
 	dc.queuePackedAICarriers(portal, sender, targetEventID, run, carriers, startSeq, anchorAt)
 	if len(run.Prompts) > 0 && run.Status.State == "streaming" {
@@ -884,6 +905,20 @@ func annotateApprovalEventIDs(run *aistream.Run, eventIDs map[string]id.EventID)
 		}
 		aistream.SetApprovalRequestedEventID(value, string(eventID))
 	}
+}
+
+func approvalEventIDPlaceholders(prompts []aistream.ApprovalPrompt) map[string]id.EventID {
+	if len(prompts) == 0 {
+		return nil
+	}
+	placeholders := make(map[string]id.EventID, len(prompts))
+	const placeholderEventID = "$approval_event_id_placeholder_padding_for_stable_ai_stream_sequence_000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000:beeper.local"
+	for _, prompt := range prompts {
+		if prompt.ID != "" {
+			placeholders[prompt.ID] = id.EventID(placeholderEventID)
+		}
+	}
+	return placeholders
 }
 
 func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *bridgev2.Portal, approvalMessage *database.Message, response agui.ToolApprovalResponse) {

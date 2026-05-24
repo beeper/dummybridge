@@ -271,6 +271,12 @@ func (w *Writer) ToolArgs(toolCallID, delta string, args any) {
 }
 
 func (w *Writer) ToolEnd(toolCallID, name string, input, result any) {
+	if result == nil {
+		result = map[string]any{
+			"state":  agui.ToolResultStateComplete,
+			"status": "success",
+		}
+	}
 	w.Add(w.builder.ToolCallEnd(toolCallID, name, input, jsonString(result), agui.ToolStateInputComplete))
 }
 
@@ -366,6 +372,18 @@ func jsonString(value any) any {
 		return fmt.Sprint(value)
 	}
 	return string(raw)
+}
+
+func jsonValue(value any) any {
+	text, ok := value.(string)
+	if !ok {
+		return value
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		return value
+	}
+	return parsed
 }
 
 func (w *Writer) StateSnapshot(state map[string]any) {
@@ -562,7 +580,7 @@ func (t Run) FinalUIMessage(textBudget int, includeThinking bool) agui.UIMessage
 				part["input"] = input
 			}
 			if result, ok := evt["result"]; ok {
-				part["output"] = result
+				part["output"] = jsonValue(result)
 			}
 		case agui.EventToolCallResult:
 			toolCallID, _ := evt["toolCallId"].(string)
@@ -592,11 +610,23 @@ func (t Run) FinalUIMessage(textBudget int, includeThinking bool) agui.UIMessage
 					approvalByID[approvalMapID(approval)] = approval
 				}
 			case "com.beeper.source":
-				message.Parts = append(message.Parts, agui.MessagePart{"type": "source-url", "source": value})
+				part := cloneValueMap(value)
+				part["type"] = "source-url"
+				if asString(part["sourceId"]) == "" {
+					part["sourceId"] = firstString(part["url"], part["title"])
+				}
+				message.Parts = append(message.Parts, part)
 			case "com.beeper.document":
-				message.Parts = append(message.Parts, agui.MessagePart{"type": "file", "file": value})
+				part := cloneValueMap(value)
+				part["type"] = "source-document"
+				if asString(part["sourceId"]) == "" {
+					part["sourceId"] = firstString(part["id"], part["title"])
+				}
+				message.Parts = append(message.Parts, part)
 			case "com.beeper.file":
-				message.Parts = append(message.Parts, agui.MessagePart{"type": "file", "file": value})
+				part := cloneValueMap(value)
+				part["type"] = "file"
+				message.Parts = append(message.Parts, part)
 			case "com.beeper.data":
 				message.Parts = append(message.Parts, agui.MessagePart{"type": "data-com-beeper-data", "data": value})
 			}
@@ -608,6 +638,11 @@ func (t Run) FinalUIMessage(textBudget int, includeThinking bool) agui.UIMessage
 				part["approvalResponse"] = response
 				part["state"] = agui.ToolStateApprovalResponded
 			}
+		}
+	}
+	if t.Status.State != "" && t.Status.State != "streaming" {
+		for _, part := range toolParts {
+			finalizeOpenToolPart(part, t.Status.State)
 		}
 	}
 	if textPart != nil {
@@ -634,6 +669,32 @@ func (t Run) FinalUIMessage(textBudget int, includeThinking bool) agui.UIMessage
 		}
 	}
 	return message
+}
+
+func finalizeOpenToolPart(part agui.MessagePart, runState string) {
+	if part == nil {
+		return
+	}
+	if _, hasOutput := part["output"]; hasOutput {
+		return
+	}
+	state, _ := part["state"].(string)
+	switch state {
+	case agui.ToolStateApprovalResponded:
+		return
+	}
+	reason := "run finalized before tool completed"
+	if runState == "aborted" {
+		reason = "run aborted before tool completed"
+	} else if runState == "error" {
+		reason = "run failed before tool completed"
+	}
+	part["state"] = agui.ToolStateInputComplete
+	part["output"] = map[string]any{
+		"state":  agui.ToolResultStateError,
+		"status": "failed",
+		"reason": reason,
+	}
 }
 
 func (t Run) InitialUIMessage() agui.UIMessage {
@@ -698,6 +759,14 @@ func asString(value any) string {
 	default:
 		return fmt.Sprint(typed)
 	}
+}
+
+func cloneValueMap(value map[string]any) agui.MessagePart {
+	cp := make(agui.MessagePart, len(value)+1)
+	for key, item := range value {
+		cp[key] = item
+	}
+	return cp
 }
 
 func firstString(values ...any) string {

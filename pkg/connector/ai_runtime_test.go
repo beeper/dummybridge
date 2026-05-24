@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/rand"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -116,12 +117,8 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 		t.Fatalf("approval prompt ID = %q, want run-scoped ID", run.Prompts[0].ID)
 	}
 	foundToolStart := false
-	seenArgsBeforeApproval := false
 	seenApprovalStateBeforeCustom := false
 	for _, evt := range run.Events {
-		if evt["type"] == agui.EventToolCallArgs {
-			seenArgsBeforeApproval = true
-		}
 		if evt["type"] == agui.EventToolCallStart {
 			if evt["state"] != agui.ToolStateApprovalRequested {
 				t.Fatalf("expected approval-requested tool state, got %#v", evt)
@@ -144,15 +141,15 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 				t.Fatalf("approval tool must not downgrade to input-complete: %#v", evt)
 			}
 			if evt["state"] == agui.ToolStateApprovalRequested {
-				if evt["input"] == nil {
-					t.Fatalf("approval input-complete event should include final input: %#v", evt)
+				if evt["input"] != nil {
+					t.Fatalf("approval input-complete event should omit placeholder input: %#v", evt)
 				}
 				seenApprovalStateBeforeCustom = true
 			}
 		}
 		if evt["type"] == agui.EventCustom && evt["name"] == agui.ApprovalCustomRequested {
-			if !seenArgsBeforeApproval || !seenApprovalStateBeforeCustom {
-				t.Fatalf("approval custom event should be emitted after tool args and approval state update: %#v", run.Events)
+			if !seenApprovalStateBeforeCustom {
+				t.Fatalf("approval custom event should be emitted after approval state update: %#v", run.Events)
 			}
 			value := evt["value"].(map[string]any)
 			if _, hasOptions := value["options"]; hasOptions {
@@ -169,8 +166,8 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 			if !ok || len(choices) == 0 || choices[0].Key != aistream.ApprovalChoiceApprove {
 				t.Fatalf("approval event should duplicate renderer choices: %#v", value["choices"])
 			}
-			if value["input"] == nil {
-				t.Fatalf("approval event should include final tool input: %#v", value)
+			if value["input"] != nil {
+				t.Fatalf("approval event should omit placeholder tool input: %#v", value)
 			}
 		}
 	}
@@ -259,7 +256,9 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 	if len(run.Prompts) != 1 {
 		t.Fatalf("expected one approval prompt, got %#v", run.Prompts)
 	}
-	initialCarriers, err := aistream.PackRunFromSeq(*run, "$anchor", aistream.CarrierBudgetBytes, 1)
+	sizingRun := *run
+	annotateApprovalEventIDs(&sizingRun, approvalEventIDPlaceholders(sizingRun.Prompts))
+	initialCarriers, err := aistream.PackRunFromSeq(sizingRun, "$anchor", aistream.CarrierBudgetBytes, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,8 +302,15 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 			annotatedValue, _ = env.Part["value"].(map[string]any)
 		}
 	}
-	if annotatedValue == nil || annotatedValue["approvalMessageId"] != prompt.ID || annotatedValue["approvalEventId"] != "$approval" {
-		t.Fatalf("approval-requested stream event missing Matrix target: %#v", annotatedValue)
+	if annotatedValue == nil || annotatedValue["approvalMessageId"] != prompt.ID {
+		t.Fatalf("approval-requested stream event missing approval message id: %#v", annotatedValue)
+	}
+	if annotatedValue["approvalEventId"] != "$approval" {
+		t.Fatalf("approval-requested stream event missing Matrix event target: %#v", annotatedValue)
+	}
+	annotatedCarriers = splitCarriersForTimedEmission(annotatedCarriers)
+	if annotatedNextSeq := aistream.NextSeq(annotatedCarriers); annotatedNextSeq != nextSeq {
+		t.Fatalf("approval event target changed stream sequence: initial=%d annotated=%d", nextSeq, annotatedNextSeq)
 	}
 	choices, ok := annotatedValue["choices"].([]any)
 	if !ok || len(choices) != len(aistream.DefaultApprovalChoices()) {
@@ -460,25 +466,27 @@ func TestBuildAIRunToolsDenyProducesStructuredDeniedResult(t *testing.T) {
 	t.Fatalf("missing structured denied tool result: %#v", run.Events)
 }
 
-func TestBuildAIRunToolsArgsAreJSONStrings(t *testing.T) {
+func TestBuildAIRunToolsOmitPlaceholderArgsAndEmitTerminalResult(t *testing.T) {
 	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream-tools 120 shell --seed=7 --chunk-chars=32:32", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, evt := range run.Events {
-		if evt["type"] != agui.EventToolCallArgs {
-			continue
+		if evt["type"] == agui.EventToolCallArgs {
+			t.Fatalf("plain demo tool should not emit placeholder args: %#v", evt)
 		}
-		args, ok := evt["args"].(string)
-		if !ok {
-			t.Fatalf("expected args to be JSON string, got %#v", evt["args"])
+		if evt["type"] == agui.EventToolCallEnd {
+			if evt["input"] != nil {
+				t.Fatalf("plain demo tool should omit placeholder input: %#v", evt)
+			}
+			result := jsonResultMap(t, evt["result"])
+			if result["state"] != agui.ToolResultStateComplete || result["status"] != "success" {
+				t.Fatalf("plain demo tool should emit terminal success result: %#v", evt)
+			}
+			return
 		}
-		if !strings.Contains(args, `"tool":"shell"`) {
-			t.Fatalf("expected JSON tool args, got %q", args)
-		}
-		return
 	}
-	t.Fatal("missing TOOL_CALL_ARGS event")
+	t.Fatal("missing TOOL_CALL_END event")
 }
 
 func TestBuildAIRunToolsPrelimUsesAGUIToolResult(t *testing.T) {
@@ -544,28 +552,32 @@ func TestBuildAIRunToolsFailureDeltaAndInputError(t *testing.T) {
 		t.Fatal(err)
 	}
 	seenFailure := false
-	seenDelta := false
 	seenInputError := false
 	for _, evt := range run.Events {
 		if evt["type"] != agui.EventToolCallEnd && evt["type"] != agui.EventToolCallArgs {
 			continue
 		}
 		toolCallID, _ := evt["toolCallId"].(string)
-		if evt["type"] == agui.EventToolCallArgs && strings.Contains(toolCallID, "fetch") && evt["args"] == nil {
-			seenDelta = true
+		if evt["type"] == agui.EventToolCallArgs && strings.Contains(toolCallID, "fetch") {
+			t.Fatalf("delta tool without real input should not emit placeholder args: %#v", evt)
 		}
 		if evt["type"] == agui.EventToolCallEnd {
-			result := jsonResultMap(t, evt["result"])
-			if strings.Contains(toolCallID, "shell") && result["state"] == agui.ToolResultStateError {
-				seenFailure = true
+			if strings.Contains(toolCallID, "shell") {
+				result := jsonResultMap(t, evt["result"])
+				if result["state"] == agui.ToolResultStateError {
+					seenFailure = true
+				}
 			}
-			if strings.Contains(toolCallID, "parser") && result["reason"] == "input-error" {
-				seenInputError = true
+			if strings.Contains(toolCallID, "parser") {
+				result := jsonResultMap(t, evt["result"])
+				if result["reason"] == "input-error" {
+					seenInputError = true
+				}
 			}
 		}
 	}
-	if !seenFailure || !seenDelta || !seenInputError {
-		t.Fatalf("missing tool tag coverage: failure=%v delta=%v inputError=%v", seenFailure, seenDelta, seenInputError)
+	if !seenFailure || !seenInputError {
+		t.Fatalf("missing tool tag coverage: failure=%v inputError=%v", seenFailure, seenInputError)
 	}
 }
 
@@ -595,14 +607,14 @@ func TestBuildAIRunToolsProviderTagAddsRawEventPassthrough(t *testing.T) {
 }
 
 func TestBuildAIRunTerminalErrorAndAbortStates(t *testing.T) {
-	errorRun, err := buildAIRun(context.Background(), "run-error", "thread-1", "stream 1 --terminal=error --seed=7", time.Unix(10, 0))
+	errorRun, err := buildAIRun(context.Background(), "run-error", "thread-1", "stream 1 --terminal=error --seed=7 --no-approval", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if errorRun.Status.State != "error" {
 		t.Fatalf("expected error status, got %#v", errorRun.Status)
 	}
-	abortRun, err := buildAIRun(context.Background(), "run-abort", "thread-1", "stream 1 --terminal=abort --seed=7", time.Unix(10, 0))
+	abortRun, err := buildAIRun(context.Background(), "run-abort", "thread-1", "stream 1 --terminal=abort --seed=7 --no-approval", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -721,6 +733,32 @@ func TestRandomModeApprovalPause(t *testing.T) {
 	t.Fatal("no approval action selected for tested random seeds")
 }
 
+func TestBalancedStream50UsuallyPausesForApproval(t *testing.T) {
+	for seed := int64(1); seed <= 20; seed++ {
+		run, err := buildAIRun(context.Background(), "run-approval", "thread-approval", "stream 50 --seed="+strconv.FormatInt(seed, 10), time.Unix(10, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.ApprovalID != "" {
+			return
+		}
+	}
+	t.Fatal("balanced stream 50 did not request approval for any sampled seed")
+}
+
+func TestBalancedStream50DoesNotPauseImmediatelyForApproval(t *testing.T) {
+	run, err := buildAIRun(context.Background(), "run-approval", "thread-approval", "stream 50 --seed=1", time.Unix(10, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.ApprovalID == "approval-run-approval-dummy-tool-1-calendar" {
+		t.Fatalf("balanced stream paused immediately for approval: %q", run.ApprovalID)
+	}
+	if strings.Contains(run.ApprovalID, "dummy-tool-1-") {
+		t.Fatalf("balanced stream paused on first action approval: %q", run.ApprovalID)
+	}
+}
+
 func TestRandomProfilesCoverToolsArtifactsAndTransientData(t *testing.T) {
 	balanced := randomCommand{
 		sharedStreamOptions: sharedStreamOptions{
@@ -800,6 +838,67 @@ func TestBuildDemoVisibleTextIsMarkdownRichAndDeterministic(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected markdown-rich text, got %q", first)
+}
+
+func TestBuildDemoVisibleTextDoesNotCutMarkdownSyntax(t *testing.T) {
+	for _, chars := range []int{24, 40, 60, 80, 96, 120, 180, 260, 420} {
+		for seed := int64(1); seed <= 80; seed++ {
+			text := buildDemoVisibleText(chars, rand.New(rand.NewSource(seed)))
+			if strings.Count(text, "[") != strings.Count(text, "]") {
+				t.Fatalf("unbalanced brackets for chars=%d seed=%d: %q", chars, seed, text)
+			}
+			assertCompleteMarkdownLinks(t, chars, seed, text)
+			if strings.Count(text, "```")%2 != 0 {
+				t.Fatalf("unbalanced code fence for chars=%d seed=%d: %q", chars, seed, text)
+			}
+			if strings.Contains(text, "https://dummybridge.") && !strings.Contains(text, "https://dummybridge.local/") {
+				t.Fatalf("cut markdown URL for chars=%d seed=%d: %q", chars, seed, text)
+			}
+		}
+	}
+}
+
+func TestRandomStreamTextBlocksKeepMarkdownBoundaries(t *testing.T) {
+	for seed := int64(1); seed <= 80; seed++ {
+		run, err := buildAIRun(context.Background(), "run-markdown", "thread-markdown", "stream 40 --seed="+strconv.FormatInt(seed, 10)+" --no-approval", time.Unix(10, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := run.Text()
+		assertCompleteMarkdownLinks(t, 40, seed, text)
+		if strings.Count(text, "[") != strings.Count(text, "]") {
+			t.Fatalf("unbalanced brackets for seed=%d: %q", seed, text)
+		}
+		if strings.Count(text, "```")%2 != 0 {
+			t.Fatalf("unbalanced code fence for seed=%d: %q", seed, text)
+		}
+		if joinedMarkdownBlockRE.MatchString(text) {
+			t.Fatalf("markdown block joined to previous text for seed=%d: %q", seed, text)
+		}
+	}
+}
+
+var joinedMarkdownBlockRE = regexp.MustCompile(`[[:lower:]](Use |Review the \[|> )`)
+
+func assertCompleteMarkdownLinks(t *testing.T, chars int, seed int64, text string) {
+	t.Helper()
+	offset := 0
+	for {
+		start := strings.Index(text[offset:], "](")
+		if start < 0 {
+			return
+		}
+		start += offset
+		close := strings.IndexByte(text[start+2:], ')')
+		if close < 0 {
+			t.Fatalf("unclosed markdown link for chars=%d seed=%d: %q", chars, seed, text)
+		}
+		linkTarget := text[start+2 : start+2+close]
+		if strings.ContainsAny(linkTarget, " \n\t") {
+			t.Fatalf("cut markdown link for chars=%d seed=%d: %q", chars, seed, text)
+		}
+		offset = start + 3 + close
+	}
 }
 
 func TestMultiApprovalContinuationKeepsLaterPrompts(t *testing.T) {

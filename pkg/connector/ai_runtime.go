@@ -916,14 +916,21 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 			}
 		}
 	}
+	approvalRequested := false
 	handleTool := func(spec toolSpec) error {
 		if err := r.runToolSpec(ctx, w, spec, rng, defaultCommonOptions()); err != nil {
+			if spec.Approval {
+				approvalRequested = true
+			}
 			if errors.Is(err, errApprovalRequested) && stepOpen {
 				w.StepFinish(stepName)
 				stepOpen = false
 				stepName = ""
 			}
 			return err
+		}
+		if spec.Approval {
+			approvalRequested = true
 		}
 		return nil
 	}
@@ -945,7 +952,8 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 		}
 		switch pickWeighted(actionOptions, actionWeightTotal, rng) {
 		case randomActionText:
-			for _, chunk := range chunkText(buildDemoVisibleText(40+rng.Intn(160), rand.New(rand.NewSource(rng.Int63()))), rng, defaultChunkMin, defaultChunkMax) {
+			text := "\n\n" + buildDemoVisibleText(40+rng.Intn(160), rand.New(rand.NewSource(rng.Int63())))
+			for _, chunk := range chunkText(text, rng, defaultChunkMin, defaultChunkMax) {
 				w.Text(chunk)
 			}
 		case randomActionThinking:
@@ -961,7 +969,7 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 				stepOpen = true
 			}
 		case randomActionTool:
-			if cmd.AllowApproval && cmd.Profile == "balanced" && rng.Intn(24) == 0 {
+			if cmd.AllowApproval && cmd.Profile == "balanced" && action >= 10 && !approvalRequested {
 				if err := handleTool(toolSpec{Name: randomToolName(rng), Approval: true, SequenceIndex: action + 1}); err != nil {
 					return err
 				}
@@ -983,7 +991,8 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 				return err
 			}
 		case randomActionSource:
-			w.Custom("com.beeper.source", map[string]any{"url": fmt.Sprintf("https://dummybridge.local/random/source/%d", action+1), "title": fmt.Sprintf("Random Source %d", action+1)})
+			sourceID := fmt.Sprintf("random-source-%d", action+1)
+			w.Custom("com.beeper.source", map[string]any{"sourceId": sourceID, "url": fmt.Sprintf("https://dummybridge.local/random/source/%d", action+1), "title": fmt.Sprintf("Random Source %d", action+1)})
 		case randomActionDocument:
 			w.Custom("com.beeper.document", map[string]any{"id": fmt.Sprintf("random-doc-%d", action+1), "title": fmt.Sprintf("Random Document %d", action+1), "mediaType": "text/plain"})
 		case randomActionFile:
@@ -1015,7 +1024,7 @@ func (r aiRunner) runRandom(ctx context.Context, w *aistream.Writer, cmd randomC
 
 func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec toolSpec, rng *rand.Rand, opts commonCommandOptions) error {
 	toolCallID := fmt.Sprintf("dummy-tool-%d-%s", spec.SequenceIndex, sanitizeToolName(spec.Name))
-	input := map[string]any{"tool": spec.Name, "sequence": spec.SequenceIndex, "tags": spec.Tags}
+	input := toolRequestInput(spec)
 	approvalID := approvalIDForRun(w.Run.RunID, toolCallID)
 	var approval *agui.ToolApproval
 	if spec.Approval {
@@ -1025,27 +1034,32 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 	w.ToolStartWithMetadata(toolCallID, spec.Name, spec.SequenceIndex-1, approval, displayMetadata)
 	annotateProviderRawEvent(w, spec, "tool_call_start")
 	if spec.InputError {
-		w.ToolArgs(toolCallID, jsonToolInput(input), nil)
-		annotateProviderRawEvent(w, spec, "tool_call_args")
+		if encodedInput := jsonToolInput(input); encodedInput != "" {
+			w.ToolArgs(toolCallID, encodedInput, nil)
+			annotateProviderRawEvent(w, spec, "tool_call_args")
+		}
 		w.ToolError(toolCallID, spec.Name, input, "input-error")
 		annotateProviderRawEvent(w, spec, "tool_call_error")
 		return nil
 	}
 	if spec.Delta {
-		for _, chunk := range chunkText(fmt.Sprintf("{\"tool\":%q,\"sequence\":%d}", spec.Name, spec.SequenceIndex), rng, opts.ChunkMin, opts.ChunkMax) {
-			w.ToolArgs(toolCallID, chunk, nil)
-			annotateProviderRawEvent(w, spec, "tool_call_args")
-			if err := r.runtime.sleep(ctx, r.sampleDelay(rng, opts.DelayMin, opts.DelayMax)); err != nil {
-				return err
+		if encodedInput := jsonToolInput(input); encodedInput != "" {
+			for _, chunk := range chunkText(encodedInput, rng, opts.ChunkMin, opts.ChunkMax) {
+				w.ToolArgs(toolCallID, chunk, nil)
+				annotateProviderRawEvent(w, spec, "tool_call_args")
+				if err := r.runtime.sleep(ctx, r.sampleDelay(rng, opts.DelayMin, opts.DelayMax)); err != nil {
+					return err
+				}
 			}
 		}
 	} else {
-		encodedInput := jsonToolInput(input)
-		w.ToolArgs(toolCallID, encodedInput, encodedInput)
-		annotateProviderRawEvent(w, spec, "tool_call_args")
+		if encodedInput := jsonToolInput(input); encodedInput != "" {
+			w.ToolArgs(toolCallID, encodedInput, encodedInput)
+			annotateProviderRawEvent(w, spec, "tool_call_args")
+		}
 	}
 	if spec.Preliminary {
-		w.ToolResult(toolCallID, fmt.Sprintf(`{"state":%q,"tool":%q}`, agui.ToolResultStateStreaming, spec.Name), agui.ToolResultStateStreaming)
+		w.ToolResult(toolCallID, fmt.Sprintf(`{"state":%q}`, agui.ToolResultStateStreaming), agui.ToolResultStateStreaming)
 		annotateProviderRawEvent(w, spec, "tool_call_result")
 	}
 	switch {
@@ -1073,9 +1087,13 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 		w.ToolError(toolCallID, spec.Name, input, "DummyBridge synthetic tool failure")
 		annotateProviderRawEvent(w, spec, "tool_call_error")
 	default:
-		w.ToolEnd(toolCallID, spec.Name, input, map[string]any{"status": "ok", "tool": spec.Name, "sequence": spec.SequenceIndex})
+		w.ToolEnd(toolCallID, spec.Name, input, nil)
 		annotateProviderRawEvent(w, spec, "tool_call_end")
 	}
+	return nil
+}
+
+func toolRequestInput(spec toolSpec) any {
 	return nil
 }
 
@@ -1143,10 +1161,16 @@ func annotateProviderRawEvent(w *aistream.Writer, spec toolSpec, stage string) {
 	}
 }
 
-func jsonToolInput(input map[string]any) string {
+func jsonToolInput(input any) string {
+	if input == nil {
+		return ""
+	}
+	if inputMap, ok := input.(map[string]any); ok && len(inputMap) == 0 {
+		return ""
+	}
 	raw, err := json.Marshal(input)
 	if err != nil {
-		return "{}"
+		return ""
 	}
 	return string(raw)
 }
@@ -1171,7 +1195,8 @@ func emitDecorations(w *aistream.Writer, opts commonCommandOptions, chars, step,
 		w.StateDelta(statePatch(map[string]any{"command": "demo", "seed": seed, "step": step + 1}))
 	}
 	for i := range splitCount(opts.Sources, steps, step) {
-		w.Custom("com.beeper.source", map[string]any{"url": fmt.Sprintf("https://dummybridge.local/source/%d-%d", step+1, i+1), "title": fmt.Sprintf("Demo Source %d.%d", step+1, i+1)})
+		sourceID := fmt.Sprintf("demo-source-%d-%d", step+1, i+1)
+		w.Custom("com.beeper.source", map[string]any{"sourceId": sourceID, "url": fmt.Sprintf("https://dummybridge.local/source/%d-%d", step+1, i+1), "title": fmt.Sprintf("Demo Source %d.%d", step+1, i+1)})
 	}
 	for i := range splitCount(opts.Documents, steps, step) {
 		w.Custom("com.beeper.document", map[string]any{"id": fmt.Sprintf("demo-doc-%d-%d", step+1, i+1), "title": fmt.Sprintf("Demo Document %d.%d", step+1, i+1), "mediaType": "text/plain"})

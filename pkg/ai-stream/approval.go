@@ -51,12 +51,6 @@ type ApprovalContext struct {
 	PreviewTruncated bool   `json:"previewTruncated,omitempty"`
 }
 
-// ApprovalSeqReservation is the size of the sequence-number window reserved
-// for the continuation of a single approval prompt. Large enough to fit any
-// realistic continuation stream without colliding with neighbouring prompts'
-// reserved ranges or their (possibly nested) continuations.
-const ApprovalSeqReservation = 10000
-
 type ApprovalRequestedValue struct {
 	ThreadID          string
 	RunID             string

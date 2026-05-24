@@ -142,17 +142,14 @@ func chooseDemoSegment(specs []demoSegmentSpec, rng *rand.Rand, remaining int) s
 	var candidates []demoSegmentSpec
 	total := 0
 	for _, spec := range specs {
-		if remaining > 0 && remaining < spec.minLen/2 {
+		if remaining > 0 && remaining < spec.minLen {
 			continue
 		}
 		candidates = append(candidates, spec)
 		total += spec.weight
 	}
 	if len(candidates) == 0 {
-		candidates = specs
-		for _, spec := range candidates {
-			total += spec.weight
-		}
+		return specs[0].build(rng, remaining)
 	}
 	target := rng.Intn(total)
 	for _, spec := range candidates {
@@ -183,6 +180,9 @@ func trimVisibleText(text string, limit int) string {
 		}
 		if next > limit {
 			if len(kept) == 0 {
+				if isMarkdownSensitiveBlock(block) {
+					return buildLoremText(limit, rand.New(rand.NewSource(int64(limit))))
+				}
 				kept = append(kept, trimText(block, limit))
 			}
 			break
@@ -194,6 +194,15 @@ func trimVisibleText(text string, limit int) string {
 		return strings.Join(kept, "\n\n")
 	}
 	return trimText(text, limit)
+}
+
+func isMarkdownSensitiveBlock(block string) bool {
+	return strings.Contains(block, "](") ||
+		strings.Contains(block, "```") ||
+		strings.Contains(block, "\n|") ||
+		strings.HasPrefix(block, "|") ||
+		strings.HasPrefix(block, ">") ||
+		strings.HasPrefix(block, "-")
 }
 
 func trimText(text string, limit int) string {

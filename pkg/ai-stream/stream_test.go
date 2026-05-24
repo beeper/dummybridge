@@ -248,6 +248,90 @@ func TestFinalUIMessageCarriesToolCallMetadata(t *testing.T) {
 	}
 }
 
+func TestFinalUIMessageCarriesParsedToolOutputs(t *testing.T) {
+	run := NewRun("run-1", "thread-1", DefaultModel, "ai", "AI", time.Unix(10, 0))
+	writer := NewWriter(run, func() time.Time { return time.Unix(10, 0) })
+	writer.ToolStart("tool-1", "shell", 0, nil)
+	writer.ToolArgs("tool-1", `{"cmd":"pwd"}`, `{"cmd":"pwd"}`)
+	writer.ToolEnd("tool-1", "shell", map[string]any{"cmd": "pwd"}, nil)
+	writer.ToolStart("tool-2", "files", 1, nil)
+	writer.ToolError("tool-2", "files", map[string]any{"path": "/tmp/nope"}, "missing")
+
+	message := run.FinalUIMessage(0, true)
+	if len(message.Parts) != 2 {
+		t.Fatalf("expected two tool parts, got %#v", message.Parts)
+	}
+	success, ok := message.Parts[0]["output"].(map[string]any)
+	if !ok || success["state"] != agui.ToolResultStateComplete || success["status"] != "success" {
+		t.Fatalf("success tool without result should emit terminal success output: %#v", message.Parts[0])
+	}
+	failure, ok := message.Parts[1]["output"].(map[string]any)
+	if !ok || failure["state"] != agui.ToolResultStateError || failure["status"] != "failed" || failure["reason"] != "missing" {
+		t.Fatalf("failed tool output should be parsed and terminal: %#v", message.Parts[1])
+	}
+}
+
+func TestFinalUIMessageFailsOpenToolsWhenRunFinalized(t *testing.T) {
+	run := NewRun("run-1", "thread-1", DefaultModel, "ai", "AI", time.Unix(10, 0))
+	writer := NewWriter(run, func() time.Time { return time.Unix(10, 0) })
+	writer.ToolStart("tool-1", "summarize", 0, nil)
+	writer.ToolStart("tool-2", "calendar", 1, nil)
+	writer.Finish(agui.FinishReasonStop)
+
+	message := run.FinalUIMessage(0, true)
+	if len(message.Parts) != 2 {
+		t.Fatalf("expected two tool parts, got %#v", message.Parts)
+	}
+	for _, part := range message.Parts {
+		if part["state"] != agui.ToolStateInputComplete {
+			t.Fatalf("open tool should be finalized as input-complete: %#v", part)
+		}
+		output, ok := part["output"].(map[string]any)
+		if !ok || output["state"] != agui.ToolResultStateError || output["status"] != "failed" {
+			t.Fatalf("open tool should get terminal failed output: %#v", part)
+		}
+	}
+}
+
+func TestFinalUIMessageCarriesTopLevelArtifactsWithStableIDs(t *testing.T) {
+	run := NewRun("run-1", "thread-1", DefaultModel, "ai", "AI", time.Unix(10, 0))
+	writer := NewWriter(run, func() time.Time { return time.Unix(10, 0) })
+	writer.Custom("com.beeper.source", map[string]any{
+		"sourceId": "source-1",
+		"url":      "https://example.com/source",
+		"title":    "Example Source",
+	})
+	writer.Custom("com.beeper.document", map[string]any{
+		"id":        "doc-1",
+		"title":     "Example Doc",
+		"mediaType": "text/plain",
+	})
+	writer.Custom("com.beeper.file", map[string]any{
+		"url":       "mxc://example/file",
+		"mediaType": "application/octet-stream",
+	})
+
+	message := run.FinalUIMessage(0, true)
+	if len(message.Parts) != 3 {
+		t.Fatalf("expected artifact parts, got %#v", message.Parts)
+	}
+	if message.Parts[0]["type"] != "source-url" || message.Parts[0]["sourceId"] != "source-1" || message.Parts[0]["url"] != "https://example.com/source" {
+		t.Fatalf("bad source part shape: %#v", message.Parts[0])
+	}
+	if _, hasNestedSource := message.Parts[0]["source"]; hasNestedSource {
+		t.Fatalf("source part should not nest payload: %#v", message.Parts[0])
+	}
+	if message.Parts[1]["type"] != "source-document" || message.Parts[1]["sourceId"] != "doc-1" || message.Parts[1]["id"] != "doc-1" {
+		t.Fatalf("bad document part shape: %#v", message.Parts[1])
+	}
+	if message.Parts[2]["type"] != "file" || message.Parts[2]["url"] != "mxc://example/file" {
+		t.Fatalf("bad file part shape: %#v", message.Parts[2])
+	}
+	if _, hasNestedFile := message.Parts[2]["file"]; hasNestedFile {
+		t.Fatalf("file part should not nest payload: %#v", message.Parts[2])
+	}
+}
+
 func TestApprovalResolverMatchesEmojiKeysAndAliases(t *testing.T) {
 	choices := DefaultApprovalChoices()
 	for _, key := range []string{"✅", "approve"} {

@@ -8,7 +8,7 @@ func buildRandomActionOptions(cmd randomCommand) ([]randomActionOption, int) {
 		{randomActionThinking, 4},
 		{randomActionStep, 2},
 		{randomActionTool, 3},
-		{randomActionToolFail, 2},
+		{randomActionToolFail, 1},
 		{randomActionSource, 2},
 		{randomActionDocument, 2},
 		{randomActionFile, 2},
