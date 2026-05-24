@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beeper/dummybridge/pkg/ag-ui"
-	"github.com/beeper/dummybridge/pkg/ai-stream"
+	"github.com/beeper/ai-bridge/pkg/ag-ui"
+	"github.com/beeper/ai-bridge/pkg/ai-stream"
 	"go.mau.fi/util/shlex"
 )
 
