@@ -181,9 +181,10 @@ func trimVisibleText(text string, limit int) string {
 		if next > limit {
 			if len(kept) == 0 {
 				if isMarkdownSensitiveBlock(block) {
-					return buildLoremText(limit, rand.New(rand.NewSource(int64(limit))))
+					kept = append(kept, trimMarkdownBlock(block, limit))
+				} else {
+					kept = append(kept, trimText(block, limit))
 				}
-				kept = append(kept, trimText(block, limit))
 			}
 			break
 		}
@@ -203,6 +204,29 @@ func isMarkdownSensitiveBlock(block string) bool {
 		strings.HasPrefix(block, "|") ||
 		strings.HasPrefix(block, ">") ||
 		strings.HasPrefix(block, "-")
+}
+
+func trimMarkdownBlock(block string, limit int) string {
+	trimmed := trimText(block, limit)
+	if strings.Count(trimmed, "[") != strings.Count(trimmed, "]") {
+		if idx := strings.LastIndex(trimmed, "["); idx >= 0 {
+			trimmed = strings.TrimSpace(trimmed[:idx])
+		}
+	}
+	if strings.Contains(trimmed, "](") && strings.Count(trimmed, "(") != strings.Count(trimmed, ")") {
+		if idx := strings.LastIndex(trimmed, "["); idx >= 0 {
+			trimmed = strings.TrimSpace(trimmed[:idx])
+		}
+	}
+	if strings.Count(trimmed, "```")%2 != 0 {
+		if idx := strings.LastIndex(trimmed, "```"); idx >= 0 {
+			trimmed = strings.TrimSpace(trimmed[:idx])
+		}
+	}
+	if trimmed == "" {
+		return trimText(block, limit)
+	}
+	return trimmed
 }
 
 func trimText(text string, limit int) string {
