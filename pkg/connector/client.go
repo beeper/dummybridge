@@ -641,14 +641,16 @@ func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid
 	}
 	carriers = splitCarriersForTimedEmission(carriers)
 	nextSeq := aistream.NextSeq(carriers)
-	approvalEventIDs := make(map[string]id.EventID, len(run.Prompts))
-	if len(run.Prompts) > 1 {
+	queuedPrompts := run.Prompts
+	if len(queuedPrompts) > 1 {
 		log.Warn().
 			Str("run_id", run.RunID).
-			Int("approval_prompts", len(run.Prompts)).
-			Msg("AI run produced multiple simultaneous approval prompts; using the same continuation sequence")
+			Int("approval_prompts", len(queuedPrompts)).
+			Msg("AI run produced multiple simultaneous approval prompts; queueing the first prompt only")
+		queuedPrompts = queuedPrompts[:1]
 	}
-	for _, prompt := range run.Prompts {
+	approvalEventIDs := make(map[string]id.EventID, len(queuedPrompts))
+	for _, prompt := range queuedPrompts {
 		prompt.SeqStart = nextSeq
 		ctx := dc.queueAIApprovalPrompt(portal, sender, run, prompt, targetEventID, command, time.Now())
 		if approvalEventID := dc.waitForMessageMXID(portal, networkid.MessageID(ctx.ID), 10*time.Second); approvalEventID != "" {
@@ -683,10 +685,10 @@ func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid
 				Msg("AI approval event ID repack changed stream sequence count")
 			return
 		}
-	} else if len(run.Prompts) > 0 {
+	} else if len(queuedPrompts) > 0 {
 		log.Info().
 			Str("run_id", run.RunID).
-			Int("approval_prompts", len(run.Prompts)).
+			Int("approval_prompts", len(queuedPrompts)).
 			Msg("Sending approval stream without approval event IDs")
 	}
 	dc.queuePackedAICarriers(portal, sender, targetEventID, run, carriers, startSeq, anchorAt)
