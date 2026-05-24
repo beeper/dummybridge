@@ -312,10 +312,10 @@ func buildAIChaosRunPlans(ctx context.Context, baseRunID, threadID string, now t
 	runner := aiRunner{runtime: virtualAIRuntime(now)}
 	actions := max(3, min(cmd.MaxActions, int(cmd.Duration/time.Second)))
 	plans := make([]aiRunPlan, 0, cmd.Runs)
+	var delay time.Duration
 	for i := range cmd.Runs {
-		var delay time.Duration
 		if i > 0 {
-			delay = runner.sampleDelay(rng, cmd.StaggerMin, cmd.StaggerMax)
+			delay += runner.sampleDelay(rng, cmd.StaggerMin, cmd.StaggerMax)
 		}
 		runID := fmt.Sprintf("%s-%d", baseRunID, i+1)
 		randomCmd := randomCommand{
@@ -353,10 +353,11 @@ func buildAIStreamRunPlans(ctx context.Context, baseRunID, threadID string, now 
 	}
 	rng := rand.New(rand.NewSource(seed))
 	plans := make([]aiRunPlan, 0, cmd.Runs)
+	runner := aiRunner{runtime: virtualAIRuntime(now)}
+	var delay time.Duration
 	for i := range cmd.Runs {
-		var delay time.Duration
 		if i > 0 {
-			delay = aiRunner{runtime: virtualAIRuntime(now)}.sampleDelay(rng, cmd.StaggerMin, cmd.StaggerMax)
+			delay += runner.sampleDelay(rng, cmd.StaggerMin, cmd.StaggerMax)
 		}
 		child := cmd
 		child.Runs = 1
