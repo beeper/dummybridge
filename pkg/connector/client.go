@@ -399,10 +399,11 @@ func (dc *DummyClient) cleanupApprovalReactions(ctx context.Context, portal *bri
 }
 
 func (dc *DummyClient) HandleMatrixReactionRemove(ctx context.Context, msg *bridgev2.MatrixReactionRemove) error {
-	if dc != nil && dc.UserLogin != nil && dc.UserLogin.Bridge != nil && msg != nil && msg.TargetReaction != nil {
-		if err := dc.UserLogin.Bridge.DB.Reaction.Delete(ctx, msg.TargetReaction); err != nil {
-			log.Warn().Err(err).Stringer("reaction_mxid", msg.TargetReaction.MXID).Msg("Failed to delete reaction on remove")
-		}
+	if dc == nil || dc.UserLogin == nil || dc.UserLogin.Bridge == nil || dc.UserLogin.Bridge.DB == nil || msg == nil || msg.TargetReaction == nil {
+		return nil
+	}
+	if err := dc.UserLogin.Bridge.DB.Reaction.Delete(ctx, msg.TargetReaction); err != nil {
+		return fmt.Errorf("failed to delete reaction on remove: %w", err)
 	}
 	return nil
 }
