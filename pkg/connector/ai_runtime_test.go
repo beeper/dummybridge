@@ -71,19 +71,19 @@ func TestBuildAIRunLoremIncludesArtifactsStateAndMetadata(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, evt := range run.Events {
-		switch evt["type"] {
+		switch evt.Type() {
 		case agui.EventTextMessageContent, agui.EventStepStarted, agui.EventStepFinished:
-			seen[evt["type"].(string)] = true
+			seen[evt.Type()] = true
 		case agui.EventStateDelta:
-			seen[evt["type"].(string)] = true
-			if _, ok := evt["delta"].([]map[string]any); !ok {
-				t.Fatalf("STATE_DELTA should use JSON Patch array, got %#v", evt["delta"])
+			seen[evt.Type()] = true
+			if _, ok := evt.Get("delta").([]map[string]any); !ok {
+				t.Fatalf("STATE_DELTA should use JSON Patch array, got %#v", evt.Get("delta"))
 			}
 		case agui.EventCustom:
-			name, _ := evt["name"].(string)
+			name, _ := evt.Get("name").(string)
 			seen[name] = true
 			if name == "com.beeper.data" {
-				value := evt["value"].(map[string]any)
+				value := evt.Get("value").(map[string]any)
 				if value["name"] == "temp" {
 					t.Fatal("transient data must not persist as metadata")
 				}
@@ -120,32 +120,32 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 	seenToolCallEndBeforeInterrupt := false
 	seenInterrupt := false
 	for _, evt := range run.Events {
-		if evt["type"] == agui.EventToolCallStart {
-			if evt["state"] != agui.ToolStateAwaitingInput {
+		if evt.Type() == agui.EventToolCallStart {
+			if evt.Get("state") != agui.ToolStateAwaitingInput {
 				t.Fatalf("tool start should stay a normal AG-UI tool call, got %#v", evt)
 			}
-			if _, ok := evt["approval"]; ok {
+			if evt.Has("approval") {
 				t.Fatalf("tool start must not carry Beeper approval metadata: %#v", evt)
 			}
-			metadata, ok := evt["metadata"].(map[string]any)
+			metadata, ok := evt.Get("metadata").(map[string]any)
 			if !ok || metadata["displayName"] != "Run Command" {
-				t.Fatalf("bad tool display metadata: %#v", evt["metadata"])
+				t.Fatalf("bad tool display metadata: %#v", evt.Get("metadata"))
 			}
 			foundToolStart = true
 		}
-		if evt["type"] == agui.EventToolCallEnd {
-			if evt["state"] != agui.ToolStateInputComplete {
+		if evt.Type() == agui.EventToolCallEnd {
+			if evt.Get("state") != agui.ToolStateInputComplete {
 				t.Fatalf("tool call should finish normally before AG-UI interrupt: %#v", evt)
 			}
-			if evt["input"] != nil {
+			if evt.Get("input") != nil {
 				t.Fatalf("approval input-complete event should omit placeholder input: %#v", evt)
 			}
 			seenToolCallEndBeforeInterrupt = true
 		}
-		if evt["type"] == agui.EventCustom {
+		if evt.Type() == agui.EventCustom {
 			t.Fatalf("approval must use AG-UI interrupt outcome, not custom event: %#v", evt)
 		}
-		if evt["type"] == agui.EventRunFinished {
+		if evt.Type() == agui.EventRunFinished {
 			if !seenToolCallEndBeforeInterrupt {
 				t.Fatalf("approval interrupt should be emitted after approval state update: %#v", run.Events)
 			}
@@ -202,11 +202,11 @@ func TestApprovalPromptSeqStartsAtNextPackedCarrierSeq(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	carriers, err := aistream.PackRunFromSeq(*run, "$anchor", aistream.CarrierBudgetBytes, 1)
+	carriers, err := aistream.PackRunFromSeq(*run, aistream.CarrierBudgetBytes, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	nextSeq := aistream.NextSeq(splitCarriersForTimedEmission(carriers))
+	nextSeq := aistream.NextSeq(carriers)
 	if nextSeq <= 1 {
 		t.Fatalf("expected initial stream to consume carrier sequence numbers, got %d", nextSeq)
 	}
@@ -233,7 +233,7 @@ func TestApprovalPromptSeqStartsAtNextPackedCarrierSeq(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continuationCarriers, err := aistream.PackRunFromSeq(continuation, "$anchor", aistream.CarrierBudgetBytes, approvalCtx.SeqStart)
+	continuationCarriers, err := aistream.PackRunFromSeq(continuation, aistream.CarrierBudgetBytes, approvalCtx.SeqStart)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,11 +256,11 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 	}
 	sizingRun := *run
 	annotateApprovalEventIDs(&sizingRun, approvalEventIDPlaceholders(sizingRun.Prompts))
-	initialCarriers, err := aistream.PackRunFromSeq(sizingRun, "$anchor", aistream.CarrierBudgetBytes, 1)
+	initialCarriers, err := aistream.PackRunFromSeq(sizingRun, aistream.CarrierBudgetBytes, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	initialCarriers = splitCarriersForTimedEmission(initialCarriers)
+	initialCarriers = initialCarriers
 	nextSeq := aistream.NextSeq(initialCarriers)
 	if nextSeq <= 1 {
 		t.Fatalf("expected initial carriers to advance sequence, got %d", nextSeq)
@@ -287,17 +287,17 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 	}
 
 	annotateApprovalEventIDs(run, map[string]id.EventID{prompt.ID: "$approval"})
-	annotatedCarriers, err := aistream.PackRunFromSeq(*run, "$anchor", aistream.CarrierBudgetBytes, 1)
+	annotatedCarriers, err := aistream.PackRunFromSeq(*run, aistream.CarrierBudgetBytes, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var annotatedInterrupt *agui.Interrupt
 	for _, carrier := range annotatedCarriers {
 		for _, env := range carrier.Envelopes {
-			if env.Part["type"] != agui.EventRunFinished {
+			if env.Event.Type() != agui.EventRunFinished {
 				continue
 			}
-			interrupts := eventInterrupts(t, env.Part)
+			interrupts := eventInterrupts(t, env.Event)
 			if len(interrupts) > 0 {
 				interrupt := interrupts[0]
 				annotatedInterrupt = &interrupt
@@ -310,7 +310,7 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 	if annotatedInterrupt.Metadata["approvalEventId"] != "$approval" {
 		t.Fatalf("approval interrupt missing Matrix event target: %#v", annotatedInterrupt)
 	}
-	annotatedCarriers = splitCarriersForTimedEmission(annotatedCarriers)
+	annotatedCarriers = annotatedCarriers
 	if annotatedNextSeq := aistream.NextSeq(annotatedCarriers); annotatedNextSeq != nextSeq {
 		t.Fatalf("approval event target changed stream sequence: initial=%d annotated=%d", nextSeq, annotatedNextSeq)
 	}
@@ -333,17 +333,20 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 	if len(continuation.Prompts) != 0 {
 		t.Fatalf("continuation must not request approval again: %#v", continuation.Prompts)
 	}
+	if len(continuation.Interrupts) != 0 || continuation.ApprovalID != "" || continuation.ToolCallID != "" {
+		t.Fatalf("finished continuation kept pending approval state: interrupts=%#v approval=%q tool=%q", continuation.Interrupts, continuation.ApprovalID, continuation.ToolCallID)
+	}
 	if continuation.Status.State != "complete" {
 		t.Fatalf("approved continuation should finish the run, got %#v", continuation.Status)
 	}
-	continuationCarriers, err := aistream.PackRunFromSeq(continuation, "$anchor", aistream.CarrierBudgetBytes, approvalCtx.SeqStart)
+	continuationCarriers, err := aistream.PackRunFromSeq(continuation, aistream.CarrierBudgetBytes, approvalCtx.SeqStart)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(continuationCarriers) == 0 || len(continuationCarriers[0].Envelopes) == 0 || continuationCarriers[0].Envelopes[0].Seq != nextSeq {
 		t.Fatalf("continuation should resume at seq %d, got %#v", nextSeq, continuationCarriers)
 	}
-	if continuation.Events[0]["type"] != agui.EventToolCallResult || toolResultApprovalID(continuation.Events[0]) != prompt.ID {
+	if continuation.Events[0].Type() != agui.EventToolCallResult || toolResultApprovalID(continuation.Events[0]) != prompt.ID {
 		t.Fatalf("continuation must start with approval tool result: %#v", continuation.Events)
 	}
 }
@@ -373,23 +376,23 @@ func TestApprovalContinuationResumesOriginalRunAfterApprovedTool(t *testing.T) {
 	if len(run.Events) == 0 {
 		t.Fatal("expected continuation events")
 	}
-	if run.Events[0]["type"] != agui.EventToolCallResult || toolResultApprovalID(run.Events[0]) != approvalCtx.ID {
+	if run.Events[0].Type() != agui.EventToolCallResult || toolResultApprovalID(run.Events[0]) != approvalCtx.ID {
 		t.Fatalf("first continuation event should be approval tool result, got %#v", run.Events[0])
 	}
 	seenApprovedTool := false
 	seenLaterTool := false
 	seenFinished := false
 	for _, evt := range run.Events {
-		if evt["type"] == agui.EventToolCallResult && evt["toolCallId"] == approvalCtx.ToolCallID {
-			result := jsonResultMap(t, evt["content"])
+		if evt.Type() == agui.EventToolCallResult && evt.Get("toolCallId") == approvalCtx.ToolCallID {
+			result := jsonResultMap(t, evt.Get("content"))
 			if result["approved"] == true {
 				seenApprovedTool = true
 			}
 		}
-		if evt["type"] == agui.EventToolCallStart && evt["toolCallId"] == "dummy-tool-2-fetch" {
+		if evt.Type() == agui.EventToolCallStart && evt.Get("toolCallId") == "dummy-tool-2-fetch" {
 			seenLaterTool = true
 		}
-		if evt["type"] == agui.EventRunFinished {
+		if evt.Type() == agui.EventRunFinished {
 			seenFinished = true
 		}
 	}
@@ -401,6 +404,9 @@ func TestApprovalContinuationResumesOriginalRunAfterApprovedTool(t *testing.T) {
 	}
 	if len(run.Prompts) != 0 {
 		t.Fatalf("finished continuation should not keep pending prompts: %#v", run.Prompts)
+	}
+	if len(run.Interrupts) != 0 || run.ApprovalID != "" || run.ToolCallID != "" {
+		t.Fatalf("finished continuation kept pending approval state: interrupts=%#v approval=%q tool=%q", run.Interrupts, run.ApprovalID, run.ToolCallID)
 	}
 }
 
@@ -429,11 +435,11 @@ func TestApprovalContinuationStopsOriginalRunAfterDeniedTool(t *testing.T) {
 	}
 	seenDeniedTool := false
 	for _, evt := range run.Events {
-		if evt["type"] == agui.EventToolCallStart && evt["toolCallId"] == "dummy-tool-2-fetch" {
+		if evt.Type() == agui.EventToolCallStart && evt.Get("toolCallId") == "dummy-tool-2-fetch" {
 			t.Fatalf("denied approval must not continue later tools: %#v", run.Events)
 		}
-		if evt["type"] == agui.EventToolCallResult && evt["toolCallId"] == approvalCtx.ToolCallID {
-			result := jsonResultMap(t, evt["content"])
+		if evt.Type() == agui.EventToolCallResult && evt.Get("toolCallId") == approvalCtx.ToolCallID {
+			result := jsonResultMap(t, evt.Get("content"))
 			if result["state"] != agui.ToolResultStateError || result["reason"] != "denied" {
 				t.Fatalf("bad denied result: %#v", result)
 			}
@@ -446,6 +452,9 @@ func TestApprovalContinuationStopsOriginalRunAfterDeniedTool(t *testing.T) {
 	if run.Status.State != "error" {
 		t.Fatalf("denied continuation status = %#v", run.Status)
 	}
+	if len(run.Prompts) != 0 || len(run.Interrupts) != 0 || run.ApprovalID != "" || run.ToolCallID != "" {
+		t.Fatalf("denied continuation kept pending approval state: prompts=%#v interrupts=%#v approval=%q tool=%q", run.Prompts, run.Interrupts, run.ApprovalID, run.ToolCallID)
+	}
 }
 
 func TestBuildAIRunToolsDenyProducesStructuredDeniedResult(t *testing.T) {
@@ -454,10 +463,10 @@ func TestBuildAIRunToolsDenyProducesStructuredDeniedResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, evt := range run.Events {
-		if evt["type"] != agui.EventToolCallResult {
+		if evt.Type() != agui.EventToolCallResult {
 			continue
 		}
-		result := jsonResultMap(t, evt["content"])
+		result := jsonResultMap(t, evt.Get("content"))
 		if result["state"] == agui.ToolResultStateError && result["reason"] == "denied" {
 			return
 		}
@@ -473,20 +482,20 @@ func TestBuildAIRunToolsOmitPlaceholderArgsAndEmitTerminalResult(t *testing.T) {
 	seenEnd := false
 	seenResult := false
 	for _, evt := range run.Events {
-		if evt["type"] == agui.EventToolCallArgs {
+		if evt.Type() == agui.EventToolCallArgs {
 			t.Fatalf("plain demo tool should not emit placeholder args: %#v", evt)
 		}
-		if evt["type"] == agui.EventToolCallEnd {
-			if evt["input"] != nil {
+		if evt.Type() == agui.EventToolCallEnd {
+			if evt.Get("input") != nil {
 				t.Fatalf("plain demo tool should omit placeholder input: %#v", evt)
 			}
-			if _, hasResult := evt["result"]; hasResult {
+			if evt.Has("result") {
 				t.Fatalf("TOOL_CALL_END must not carry result: %#v", evt)
 			}
 			seenEnd = true
 		}
-		if evt["type"] == agui.EventToolCallResult {
-			result := jsonResultMap(t, evt["content"])
+		if evt.Type() == agui.EventToolCallResult {
+			result := jsonResultMap(t, evt.Get("content"))
 			if result["state"] != agui.ToolResultStateComplete || result["status"] != "success" {
 				t.Fatalf("plain demo tool should emit terminal success result: %#v", evt)
 			}
@@ -504,10 +513,10 @@ func TestBuildAIRunToolsPrelimUsesAGUIToolResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, evt := range run.Events {
-		if evt["type"] != agui.EventToolCallResult {
+		if evt.Type() != agui.EventToolCallResult {
 			continue
 		}
-		if evt["state"] != agui.ToolResultStateStreaming || evt["toolCallId"] == "" || evt["content"] == "" {
+		if evt.Get("state") != agui.ToolResultStateStreaming || evt.Get("toolCallId") == "" || evt.Get("content") == "" {
 			t.Fatalf("bad TOOL_CALL_RESULT event: %#v", evt)
 		}
 		return
@@ -523,15 +532,15 @@ func TestBuildAIRunFinalSnapshotPreservesToolParts(t *testing.T) {
 	var snapshot []agui.Message
 	seenRunFinished := false
 	for _, evt := range run.Events {
-		switch evt["type"] {
+		switch evt.Type() {
 		case agui.EventMessagesSnapshot:
 			if seenRunFinished {
 				t.Fatal("final snapshot must be emitted before RUN_FINISHED")
 			}
 			var ok bool
-			snapshot, ok = evt["messages"].([]agui.Message)
+			snapshot, ok = evt.Get("messages").([]agui.Message)
 			if !ok {
-				t.Fatalf("bad snapshot payload: %#v", evt["messages"])
+				t.Fatalf("bad snapshot payload: %#v", evt.Get("messages"))
 			}
 		case agui.EventRunFinished:
 			seenRunFinished = true
@@ -563,22 +572,22 @@ func TestBuildAIRunToolsFailureDeltaAndInputError(t *testing.T) {
 	seenFailure := false
 	seenInputError := false
 	for _, evt := range run.Events {
-		if evt["type"] != agui.EventToolCallResult && evt["type"] != agui.EventToolCallArgs {
+		if evt.Type() != agui.EventToolCallResult && evt.Type() != agui.EventToolCallArgs {
 			continue
 		}
-		toolCallID, _ := evt["toolCallId"].(string)
-		if evt["type"] == agui.EventToolCallArgs && strings.Contains(toolCallID, "fetch") {
+		toolCallID, _ := evt.Get("toolCallId").(string)
+		if evt.Type() == agui.EventToolCallArgs && strings.Contains(toolCallID, "fetch") {
 			t.Fatalf("delta tool without real input should not emit placeholder args: %#v", evt)
 		}
-		if evt["type"] == agui.EventToolCallResult {
+		if evt.Type() == agui.EventToolCallResult {
 			if strings.Contains(toolCallID, "shell") {
-				result := jsonResultMap(t, evt["content"])
+				result := jsonResultMap(t, evt.Get("content"))
 				if result["state"] == agui.ToolResultStateError {
 					seenFailure = true
 				}
 			}
 			if strings.Contains(toolCallID, "parser") {
-				result := jsonResultMap(t, evt["content"])
+				result := jsonResultMap(t, evt.Get("content"))
 				if result["reason"] == "input-error" {
 					seenInputError = true
 				}
@@ -596,14 +605,14 @@ func TestBuildAIRunToolsProviderTagAddsRawEventPassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, evt := range run.Events {
-		raw, ok := evt["rawEvent"].(map[string]any)
+		raw, ok := evt.Get("rawEvent").(map[string]any)
 		if !ok {
 			continue
 		}
 		if raw["provider"] != "dummybridge" || raw["tool"] != "shell" {
 			t.Fatalf("bad raw provider event: %#v", raw)
 		}
-		carriers, err := aistream.PackRun(*run, "$anchor", aistream.CarrierBudgetBytes)
+		carriers, err := aistream.PackRun(*run, aistream.CarrierBudgetBytes)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -637,7 +646,7 @@ func TestBuildAIRunOver64KBPacksTo58KCarriers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	carriers, err := aistream.PackRun(*run, "$anchor", aistream.CarrierBudgetBytes)
+	carriers, err := aistream.PackRun(*run, aistream.CarrierBudgetBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,16 +654,16 @@ func TestBuildAIRunOver64KBPacksTo58KCarriers(t *testing.T) {
 		t.Fatalf("expected split carriers, got %d", len(carriers))
 	}
 	for i, carrier := range carriers {
-		if size := aistream.JSONSize(aistream.CarrierContent(carrier.Envelopes)); size > aistream.CarrierBudgetBytes {
+		if size := aistream.JSONSize(aistream.CarrierContent(*run, carrier.Envelopes)); size > aistream.CarrierBudgetBytes {
 			t.Fatalf("carrier %d size = %d", i, size)
 		}
 	}
 	for _, carrier := range carriers {
 		for _, envelope := range carrier.Envelopes {
-			if envelope.Part["type"] != agui.EventMessagesSnapshot {
+			if envelope.Event.Type() != agui.EventMessagesSnapshot {
 				continue
 			}
-			raw, err := json.Marshal(envelope.Part)
+			raw, err := json.Marshal(envelope.Event)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -701,9 +710,9 @@ func TestBuildAIRunRandomHonorsVirtualDelays(t *testing.T) {
 	}
 	var first, last int64
 	for _, evt := range run.Events {
-		ts, _ := evt["timestamp"].(int64)
+		ts, _ := evt.Get("timestamp").(int64)
 		if ts == 0 {
-			if n, ok := evt["timestamp"].(int); ok {
+			if n, ok := evt.Get("timestamp").(int); ok {
 				ts = int64(n)
 			}
 		}
@@ -942,6 +951,12 @@ func TestMultiApprovalContinuationKeepsLaterPrompts(t *testing.T) {
 	if len(firstInterrupts(t, run.Events)) != 1 {
 		t.Fatalf("expected continuation with pending approval to finish with one interrupt: %#v", run.Events)
 	}
+	if len(run.Interrupts) != 1 || run.Interrupts[0].ID != run.Prompts[0].ID {
+		t.Fatalf("pending continuation should expose only the new interrupt: prompts=%#v interrupts=%#v", run.Prompts, run.Interrupts)
+	}
+	if run.ApprovalID != run.Prompts[0].ID || run.ToolCallID != run.Prompts[0].ToolCallID {
+		t.Fatalf("pending continuation should target the new approval: prompts=%#v approval=%q tool=%q", run.Prompts, run.ApprovalID, run.ToolCallID)
+	}
 
 	secondCtx := aistream.ApprovalContext{
 		ID:          run.Prompts[0].ID,
@@ -974,6 +989,9 @@ func TestMultiApprovalContinuationKeepsLaterPrompts(t *testing.T) {
 	}
 	if len(finished.Prompts) != 0 {
 		t.Fatalf("finished continuation should not keep prompts: %#v", finished.Prompts)
+	}
+	if len(finished.Interrupts) != 0 || finished.ApprovalID != "" || finished.ToolCallID != "" {
+		t.Fatalf("finished continuation kept pending approval state: interrupts=%#v approval=%q tool=%q", finished.Interrupts, finished.ApprovalID, finished.ToolCallID)
 	}
 }
 
@@ -1020,7 +1038,7 @@ func TestApprovalContinuationReplaysRandomRunWithImplicitSeed(t *testing.T) {
 		if len(continuation.Events) == 0 {
 			t.Fatalf("expected continuation events for random run, got none")
 		}
-		if continuation.Events[0]["type"] != agui.EventToolCallResult || toolResultApprovalID(continuation.Events[0]) != approvalCtx.ID {
+		if continuation.Events[0].Type() != agui.EventToolCallResult || toolResultApprovalID(continuation.Events[0]) != approvalCtx.ID {
 			t.Fatalf("first continuation event should be approval tool result, got %#v", continuation.Events[0])
 		}
 		return
@@ -1069,7 +1087,7 @@ func jsonResultMap(t *testing.T, value any) map[string]any {
 func firstInterrupts(t *testing.T, events []agui.Event) []agui.Interrupt {
 	t.Helper()
 	for _, evt := range events {
-		if evt["type"] != agui.EventRunFinished {
+		if evt.Type() != agui.EventRunFinished {
 			continue
 		}
 		interrupts := eventInterrupts(t, evt)
@@ -1082,7 +1100,7 @@ func firstInterrupts(t *testing.T, events []agui.Event) []agui.Interrupt {
 
 func eventInterrupts(t *testing.T, evt agui.Event) []agui.Interrupt {
 	t.Helper()
-	switch outcome := evt["outcome"].(type) {
+	switch outcome := evt.Get("outcome").(type) {
 	case agui.RunFinishedOutcome:
 		if outcome.Type != agui.OutcomeInterrupt {
 			return nil
@@ -1116,7 +1134,7 @@ func eventInterrupts(t *testing.T, evt agui.Event) []agui.Interrupt {
 		}
 		return interrupts
 	default:
-		t.Fatalf("bad outcome payload: %#v", evt["outcome"])
+		t.Fatalf("bad outcome payload: %#v", evt.Get("outcome"))
 		return nil
 	}
 }

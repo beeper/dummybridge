@@ -330,13 +330,13 @@ func annotateProviderRawEvent(w *aistream.Writer, spec toolSpec, stage string) {
 	if !spec.Provider || w == nil || w.Run == nil || len(w.Run.Events) == 0 {
 		return
 	}
-	w.Run.Events[len(w.Run.Events)-1]["rawEvent"] = map[string]any{
+	w.Run.Events[len(w.Run.Events)-1].Set("rawEvent", map[string]any{
 		"provider": "dummybridge",
 		"stage":    stage,
 		"tool":     spec.Name,
 		"sequence": spec.SequenceIndex,
 		"tags":     spec.Tags,
-	}
+	})
 }
 
 func jsonToolInput(input any) string {

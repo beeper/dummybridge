@@ -42,20 +42,14 @@ func TestGetRemoteEchoBehavior(t *testing.T) {
 
 func TestSleepUntilCarrierTimeWithoutConnectedContext(t *testing.T) {
 	base := time.Now()
+	builder := agui.NewEventBuilder("dummybridge/test", func() time.Time { return base })
 	run := aistream.Run{
-		Events: []agui.Event{{
-			"type":      agui.EventRunStarted,
-			"timestamp": base.UnixMilli(),
-			"threadId":  "thread-1",
-		}},
+		Events: []agui.Event{builder.RunStarted("thread-1", "run-1")},
 	}
+	builder = agui.NewEventBuilder("dummybridge/test", func() time.Time { return base.Add(time.Millisecond) })
 	carrier := aistream.Carrier{
 		Envelopes: []aistream.Envelope{{
-			Part: agui.Event{
-				"type":      agui.EventTextMessageContent,
-				"timestamp": base.Add(time.Millisecond).UnixMilli(),
-				"messageId": "message-1",
-			},
+			Event: builder.TextMessageContent("message-1", "hello"),
 		}},
 	}
 

@@ -36,7 +36,7 @@ func helpText() string {
 	return strings.Join([]string{
 		"DummyBridge demo commands:",
 		"help",
-		"stream [seconds] [--runs=N] [--profile=balanced|tools|errors|artifacts] [--seed=N] [--chars=N] [--terminal=stop|length|abort|error] [--delay-ms=min:max] [--stagger-ms=min:max] [--actions=N] [--no-approval] [--allow-abort] [--allow-error]",
+		"stream [seconds] [--runs=N] [--profile=balanced|tools|errors|artifacts] [--seed=N] [--chars=N] [--terminal=stop|length|tool_calls|content_filter|other|abort|error] [--delay-ms=min:max] [--stagger-ms=min:max] [--actions=N] [--no-approval] [--allow-abort] [--allow-error]",
 		"stream-tools <chars> <tool[#fail|#approval|#deny|#delta|#inputerror|#prelim|#provider]>... [common options]",
 		"Notes: stream enables approval requests by default; approval-tagged tools emit a separate Matrix approval event with reaction options.",
 	}, "\n")
@@ -183,7 +183,7 @@ func parseStreamLikeCommand(tokens []string, cmd *randomCommand, deriveActions b
 				cmd.Terminal = "finish"
 			case "abort", "error":
 				cmd.Terminal = strings.ToLower(value)
-			case "length", "tool-calls", "content-filter", "other":
+			case "length", "tool_calls", "content_filter", "other":
 				cmd.Terminal = agui.NormalizeFinishReason(value)
 			default:
 				return nil, fmt.Errorf("unknown terminal %q", value)
@@ -348,6 +348,9 @@ func parseCommonOptions(tokens []string) (commonCommandOptions, error) {
 				return opts, fmt.Errorf("%s requires a value", token)
 			}
 			opts.FinishReason = agui.NormalizeFinishReason(value)
+			if !agui.ValidFinishReason(opts.FinishReason) {
+				return opts, fmt.Errorf("unknown finish reason %q", value)
+			}
 		case "abort":
 			opts.Abort = true
 		case "error":
