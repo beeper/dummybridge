@@ -95,13 +95,12 @@ func TestBuildAIRunLoremIncludesArtifactsStateAndMetadata(t *testing.T) {
 			t.Fatalf("missing %s in events", key)
 		}
 	}
-	metadata := run.Metadata()
-	if metadata["model"] == "" || metadata["threadId"] != "thread-1" || metadata["runId"] != "run-1" {
-		t.Fatalf("bad metadata: %#v", metadata)
+	payload := run.AI(aistream.AIKindFinal)
+	if payload.Model == "" || payload.ThreadID != "thread-1" || payload.RunID != "run-1" {
+		t.Fatalf("bad AI payload: %#v", payload)
 	}
-	data := metadata["data"].(map[string]any)
-	if _, ok := data["temp"]; ok {
-		t.Fatalf("transient data leaked into final metadata: %#v", data)
+	if _, ok := payload.Data["temp"]; ok {
+		t.Fatalf("transient data leaked into final AI payload: %#v", payload.Data)
 	}
 }
 
@@ -202,7 +201,7 @@ func TestApprovalPromptSeqStartsAtNextPackedCarrierSeq(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	carriers, err := aistream.PackRunFromSeq(*run, aistream.CarrierBudgetBytes, 1)
+	carriers, err := aistream.PackRunByTimeFromSeq(*run, 1, demoStreamCarrierMaxSpan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +232,7 @@ func TestApprovalPromptSeqStartsAtNextPackedCarrierSeq(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continuationCarriers, err := aistream.PackRunFromSeq(continuation, aistream.CarrierBudgetBytes, approvalCtx.SeqStart)
+	continuationCarriers, err := aistream.PackRunByTimeFromSeq(continuation, approvalCtx.SeqStart, demoStreamCarrierMaxSpan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +255,7 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 	}
 	sizingRun := *run
 	annotateApprovalEventIDs(&sizingRun, approvalEventIDPlaceholders(sizingRun.Prompts))
-	initialCarriers, err := aistream.PackRunFromSeq(sizingRun, aistream.CarrierBudgetBytes, 1)
+	initialCarriers, err := aistream.PackRunByTimeFromSeq(sizingRun, 1, demoStreamCarrierMaxSpan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +286,7 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 	}
 
 	annotateApprovalEventIDs(run, map[string]id.EventID{prompt.ID: "$approval"})
-	annotatedCarriers, err := aistream.PackRunFromSeq(*run, aistream.CarrierBudgetBytes, 1)
+	annotatedCarriers, err := aistream.PackRunByTimeFromSeq(*run, 1, demoStreamCarrierMaxSpan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +338,7 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 	if continuation.Status.State != "complete" {
 		t.Fatalf("approved continuation should finish the run, got %#v", continuation.Status)
 	}
-	continuationCarriers, err := aistream.PackRunFromSeq(continuation, aistream.CarrierBudgetBytes, approvalCtx.SeqStart)
+	continuationCarriers, err := aistream.PackRunByTimeFromSeq(continuation, approvalCtx.SeqStart, demoStreamCarrierMaxSpan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,7 +611,7 @@ func TestBuildAIRunToolsProviderTagAddsRawEventPassthrough(t *testing.T) {
 		if raw["provider"] != "dummybridge" || raw["tool"] != "shell" {
 			t.Fatalf("bad raw provider event: %#v", raw)
 		}
-		carriers, err := aistream.PackRun(*run, aistream.CarrierBudgetBytes)
+		carriers, err := aistream.PackRun(*run)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -641,39 +640,44 @@ func TestBuildAIRunTerminalErrorAndAbortStates(t *testing.T) {
 	}
 }
 
-func TestBuildAIRunOver64KBPacksTo58KCarriers(t *testing.T) {
+func TestBuildAIRunOver64KBStreamsWithoutCarrierSizeSplit(t *testing.T) {
 	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream 1 --chars=70000 --actions=1 --seed=7", time.Unix(10, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	carriers, err := aistream.PackRun(*run, aistream.CarrierBudgetBytes)
+	carriers, err := aistream.PackRun(*run)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(carriers) < 2 {
-		t.Fatalf("expected split carriers, got %d", len(carriers))
-	}
-	for i, carrier := range carriers {
-		if size := aistream.JSONSize(aistream.CarrierContent(*run, carrier.Envelopes)); size > aistream.CarrierBudgetBytes {
-			t.Fatalf("carrier %d size = %d", i, size)
-		}
-	}
-	for _, carrier := range carriers {
-		for _, envelope := range carrier.Envelopes {
-			if envelope.Event.Type() != agui.EventMessagesSnapshot {
-				continue
-			}
-			raw, err := json.Marshal(envelope.Event)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(raw), strings.Repeat("a", 60*1024)) {
-				t.Fatal("final snapshot should not repeat full streamed text")
-			}
-		}
+	if len(carriers) != 1 {
+		t.Fatalf("stream packing must not split by size, got %d carriers", len(carriers))
 	}
 	if len(aistream.ReconstructText(carriers)) < 60*1024 {
 		t.Fatalf("expected large reconstructed output, got %d", len(aistream.ReconstructText(carriers)))
+	}
+	_, segments := aistream.FinalUIMessageContent(*run, aistream.FinalMessageBudgetBytes)
+	if len(segments) == 0 {
+		t.Fatal("large final UIMessage should be segmented during finalization")
+	}
+}
+
+func TestBuildAIRunStream50PacksByCadence(t *testing.T) {
+	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream 50 --seed=7 --no-approval", time.Unix(10, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	carriers, err := aistream.PackRunByTimeFromSeq(*run, 1, demoStreamCarrierMaxSpan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(carriers) < 10 {
+		t.Fatalf("stream 50 should produce incremental carriers, got %d", len(carriers))
+	}
+	start := time.Unix(100, 0)
+	first := aistream.CarrierTimestamp(*run, carriers[0], start)
+	last := aistream.CarrierTimestamp(*run, carriers[len(carriers)-1], start)
+	if first.IsZero() || last.IsZero() || !last.After(first) {
+		t.Fatalf("carrier timestamps should preserve stream cadence, first=%s last=%s", first, last)
 	}
 }
 

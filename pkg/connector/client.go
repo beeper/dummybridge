@@ -55,6 +55,7 @@ var _ bridgev2.ReactionHandlingNetworkAPI = (*DummyClient)(nil)
 const (
 	dummyAIAgentName         string = "Dummy"
 	defaultAIApprovalTimeout        = 5 * time.Minute
+	demoStreamCarrierMaxSpan        = 750 * time.Millisecond
 )
 
 var delayedRemoteEchoPattern = regexp.MustCompile(`(?i)^remote-echo\s+delay\s+([0-9]+(?:ms|s|m|h))$`)
@@ -581,7 +582,7 @@ func (dc *DummyClient) queueAIRunStreamAndMetadata(portal *bridgev2.Portal, send
 func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid.UserID, messageID networkid.MessageID, targetEventID id.EventID, run aistream.Run, command string, startSeq int, anchorAt time.Time) {
 	sizingRun := run
 	annotateApprovalEventIDs(&sizingRun, approvalEventIDPlaceholders(sizingRun.Prompts))
-	carriers, err := aistream.PackRunFromSeq(sizingRun, aistream.CarrierBudgetBytes, startSeq)
+	carriers, err := aistream.PackRunByTimeFromSeq(sizingRun, startSeq, demoStreamCarrierMaxSpan)
 	if err != nil {
 		log.Warn().Err(err).Str("run_id", run.RunID).Msg("Failed to pack AI stream")
 		return
@@ -620,7 +621,7 @@ func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid
 	}
 	if len(approvalEventIDs) > 0 {
 		annotateApprovalEventIDs(&run, approvalEventIDs)
-		carriers, err = aistream.PackRunFromSeq(run, aistream.CarrierBudgetBytes, startSeq)
+		carriers, err = aistream.PackRunByTimeFromSeq(run, startSeq, demoStreamCarrierMaxSpan)
 		if err != nil {
 			log.Warn().Err(err).Str("run_id", run.RunID).Msg("Failed to repack AI stream with approval event IDs")
 			return
@@ -701,7 +702,7 @@ func (dc *DummyClient) queuePackedAICarriers(portal *bridgev2.Portal, sender net
 }
 
 func (dc *DummyClient) sleepUntilCarrierTime(run aistream.Run, carrier aistream.Carrier, streamStart time.Time) {
-	target := carrierTimestamp(run, carrier, streamStart)
+	target := aistream.CarrierTimestamp(run, carrier, streamStart)
 	if target.IsZero() {
 		return
 	}
@@ -715,66 +716,6 @@ func (dc *DummyClient) sleepUntilCarrierTime(run aistream.Run, carrier aistream.
 	case <-dc.done():
 		timer.Stop()
 	}
-}
-
-func carrierTimestamp(run aistream.Run, carrier aistream.Carrier, streamStart time.Time) time.Time {
-	base := runStartTimestamp(run)
-	if base.IsZero() {
-		return time.Time{}
-	}
-	var latest time.Time
-	for _, env := range carrier.Envelopes {
-		eventTime := eventTimestamp(env.Event)
-		if eventTime.IsZero() {
-			continue
-		}
-		if latest.IsZero() || eventTime.After(latest) {
-			latest = eventTime
-		}
-	}
-	if latest.IsZero() {
-		return time.Time{}
-	}
-	return streamStart.Add(latest.Sub(base))
-}
-
-func runStartTimestamp(run aistream.Run) time.Time {
-	for _, evt := range run.Events {
-		if ts := eventTimestamp(evt); !ts.IsZero() {
-			return ts
-		}
-	}
-	return time.Time{}
-}
-
-func eventTimestamp(evt agui.Event) time.Time {
-	raw := evt.Get("timestamp")
-	if !evt.Has("timestamp") {
-		return time.Time{}
-	}
-	var millis int64
-	switch value := raw.(type) {
-	case int64:
-		millis = value
-	case int:
-		millis = int64(value)
-	case int32:
-		millis = int64(value)
-	case float64:
-		millis = int64(value)
-	case json.Number:
-		parsed, err := value.Int64()
-		if err != nil {
-			return time.Time{}
-		}
-		millis = parsed
-	default:
-		return time.Time{}
-	}
-	if millis <= 0 {
-		return time.Time{}
-	}
-	return time.UnixMilli(millis)
 }
 
 func (dc *DummyClient) waitForMessageMXID(
@@ -828,7 +769,6 @@ func (dc *DummyClient) lookupMessage(ctx context.Context, receiver networkid.Use
 }
 
 func (dc *DummyClient) queueAIApprovalPrompt(portal *bridgev2.Portal, sender networkid.UserID, run aistream.Run, prompt aistream.ApprovalPrompt, targetEventID id.EventID, command string, timestamp time.Time) aistream.ApprovalContext {
-	choices := aistream.DefaultApprovalChoices()
 	approvalCtx := aistream.ApprovalContext{
 		ID:               prompt.ID,
 		ThreadID:         run.ThreadID,
@@ -846,11 +786,6 @@ func (dc *DummyClient) queueAIApprovalPrompt(portal *bridgev2.Portal, sender net
 		PreviewTruncated: run.Preview.Truncated,
 	}
 	dc.UserLogin.QueueRemoteEvent(aibridgev2.ApprovalPrompt(portal.PortalKey, sender, approvalCtx, timestamp))
-
-	for i, choice := range choices {
-		choice := choice
-		dc.UserLogin.QueueRemoteEvent(aibridgev2.ApprovalOptionReaction(portal.PortalKey, sender, approvalCtx, choice, timestamp.Add(time.Duration(i+1)*time.Millisecond)))
-	}
 	return approvalCtx
 }
 
@@ -894,23 +829,6 @@ func annotateApprovalOutcomeEventIDs(evt agui.Event, eventIDs map[string]id.Even
 				continue
 			}
 			aistream.SetApprovalInterruptEventID(&outcome.Interrupts[i], string(eventID))
-		}
-	case map[string]any:
-		interrupts, _ := outcome["interrupts"].([]any)
-		for _, raw := range interrupts {
-			interrupt, _ := raw.(map[string]any)
-			approvalID, _ := interrupt["id"].(string)
-			eventID := eventIDs[approvalID]
-			if interrupt == nil || eventID == "" {
-				continue
-			}
-			metadata, _ := interrupt["metadata"].(map[string]any)
-			if metadata == nil {
-				metadata = map[string]any{}
-				interrupt["metadata"] = metadata
-			}
-			metadata["approvalMessageId"] = approvalID
-			metadata["approvalEventId"] = string(eventID)
 		}
 	}
 }
@@ -1072,44 +990,14 @@ func approvalInterruptsFromEvents(events []agui.Event) []agui.Interrupt {
 				continue
 			}
 			interrupts = append(interrupts, outcome.Interrupts...)
-		case map[string]any:
-			if outcome["type"] != agui.OutcomeInterrupt {
+		case *agui.RunFinishedOutcome:
+			if outcome == nil || outcome.Type != agui.OutcomeInterrupt {
 				continue
 			}
-			rawInterrupts, _ := outcome["interrupts"].([]any)
-			for _, raw := range rawInterrupts {
-				interrupt, _ := raw.(map[string]any)
-				if len(interrupt) == 0 {
-					continue
-				}
-				metadata, _ := interrupt["metadata"].(map[string]any)
-				responseSchema, _ := interrupt["responseSchema"].(map[string]any)
-				interrupts = append(interrupts, agui.Interrupt{
-					ID:             eventStringValue(interrupt["id"]),
-					Reason:         eventStringValue(interrupt["reason"]),
-					Message:        eventStringValue(interrupt["message"]),
-					ToolCallID:     eventStringValue(interrupt["toolCallId"]),
-					ResponseSchema: responseSchema,
-					ExpiresAt:      eventStringValue(interrupt["expiresAt"]),
-					Metadata:       metadata,
-				})
-			}
+			interrupts = append(interrupts, outcome.Interrupts...)
 		}
 	}
 	return interrupts
-}
-
-func eventStringValue(value any) string {
-	switch typed := value.(type) {
-	case string:
-		return typed
-	case fmt.Stringer:
-		return typed.String()
-	case nil:
-		return ""
-	default:
-		return fmt.Sprint(typed)
-	}
 }
 
 func approvalContinuationStart(events []agui.Event, approvalID string) int {
@@ -1178,44 +1066,72 @@ func approvalContextFromAny(value any) (aistream.ApprovalContext, bool) {
 		}
 		return validApprovalContext(*typed)
 	case map[string]any:
-		if nested, ok := typed["com.beeper.ai.approval"]; ok {
+		if nested, ok := typed[aistream.BeeperAIApprovalKey]; ok {
 			return approvalContextFromAny(nested)
 		}
-	case *map[string]any:
-		if typed == nil {
-			return aistream.ApprovalContext{}, false
-		}
-		return approvalContextFromAny(*typed)
+		return validApprovalContext(approvalContextFromMap(typed))
 	case json.RawMessage:
 		return approvalContextFromJSON(typed)
 	case []byte:
 		return approvalContextFromJSON(typed)
-	case string:
-		return approvalContextFromJSON([]byte(typed))
 	}
-	var ctx aistream.ApprovalContext
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return aistream.ApprovalContext{}, false
+	return aistream.ApprovalContext{}, false
+}
+
+func approvalContextFromMap(raw map[string]any) aistream.ApprovalContext {
+	return aistream.ApprovalContext{
+		ID:               stringField(raw, "id"),
+		ThreadID:         stringField(raw, "threadId"),
+		RunID:            stringField(raw, "runId"),
+		MessageID:        stringField(raw, "messageId"),
+		Command:          stringField(raw, "command"),
+		ToolCallID:       stringField(raw, "toolCallId"),
+		ToolName:         stringField(raw, "toolName"),
+		TargetEvent:      stringField(raw, "targetEvent"),
+		AgentID:          stringField(raw, "agentId"),
+		AgentName:        stringField(raw, "agentName"),
+		Model:            stringField(raw, "model"),
+		SeqStart:         intField(raw, "seqStart"),
+		PreviewText:      stringField(raw, "previewText"),
+		PreviewTruncated: boolField(raw, "previewTruncated"),
 	}
-	if err = json.Unmarshal(raw, &ctx); err != nil {
-		return aistream.ApprovalContext{}, false
-	}
-	return validApprovalContext(ctx)
 }
 
 func approvalContextFromJSON(raw []byte) (aistream.ApprovalContext, bool) {
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err == nil {
-		if approvalCtx, ok := approvalContextFromAny(decoded); ok {
+	var ctx aistream.ApprovalContext
+	if err := json.Unmarshal(raw, &ctx); err == nil {
+		if approvalCtx, ok := validApprovalContext(ctx); ok {
 			return approvalCtx, true
 		}
 	}
-	var ctx aistream.ApprovalContext
-	if err := json.Unmarshal(raw, &ctx); err != nil {
+	var wrapper map[string]any
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
 		return aistream.ApprovalContext{}, false
 	}
-	return validApprovalContext(ctx)
+	return approvalContextFromAny(wrapper)
+}
+
+func stringField(raw map[string]any, key string) string {
+	value, _ := raw[key].(string)
+	return value
+}
+
+func intField(raw map[string]any, key string) int {
+	switch value := raw[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func boolField(raw map[string]any, key string) bool {
+	value, _ := raw[key].(bool)
+	return value
 }
 
 func messageIDString(message *database.Message) string {
