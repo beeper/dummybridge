@@ -204,9 +204,9 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 	toolCallID := fmt.Sprintf("dummy-tool-%d-%s", spec.SequenceIndex, sanitizeToolName(spec.Name))
 	input := toolRequestInput(spec)
 	approvalID := approvalIDForRun(w.Run.RunID, toolCallID)
-	var approval *agui.ToolApproval
+	var approval *aistream.ToolApproval
 	if spec.Approval {
-		approval = &agui.ToolApproval{ID: approvalID, NeedsApproval: true}
+		approval = &aistream.ToolApproval{ID: approvalID, NeedsApproval: true}
 	}
 	displayMetadata := toolDisplayMetadata(spec.Name)
 	w.ToolStartWithMetadata(toolCallID, spec.Name, spec.SequenceIndex-1, approval, displayMetadata)

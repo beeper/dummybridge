@@ -42,7 +42,7 @@ type DummyClient struct {
 }
 
 type aiRunSession struct {
-	Decisions map[string]agui.ToolApprovalResponse
+	Decisions map[string]aistream.ToolApprovalResponse
 }
 
 var _ bridgev2.NetworkAPI = (*DummyClient)(nil)
@@ -846,20 +846,60 @@ func annotateApprovalEventIDs(run *aistream.Run, eventIDs map[string]id.EventID)
 	if run == nil || len(eventIDs) == 0 {
 		return
 	}
-	for _, evt := range run.Events {
-		if evt["type"] != agui.EventCustom || evt["name"] != agui.ApprovalCustomRequested {
-			continue
-		}
-		value, _ := evt["value"].(map[string]any)
-		if value == nil {
-			continue
-		}
-		approvalID := aistream.ApprovalIDFromRequestedValue(value)
-		eventID := eventIDs[approvalID]
+	for i := range run.Interrupts {
+		eventID := eventIDs[run.Interrupts[i].ID]
 		if eventID == "" {
 			continue
 		}
-		aistream.SetApprovalRequestedEventID(value, string(eventID))
+		aistream.SetApprovalInterruptEventID(&run.Interrupts[i], string(eventID))
+	}
+	for _, evt := range run.Events {
+		if evt["type"] != agui.EventRunFinished {
+			continue
+		}
+		annotateApprovalOutcomeEventIDs(evt, eventIDs)
+	}
+}
+
+func annotateApprovalOutcomeEventIDs(evt agui.Event, eventIDs map[string]id.EventID) {
+	switch outcome := evt["outcome"].(type) {
+	case agui.RunFinishedOutcome:
+		for i := range outcome.Interrupts {
+			eventID := eventIDs[outcome.Interrupts[i].ID]
+			if eventID == "" {
+				continue
+			}
+			aistream.SetApprovalInterruptEventID(&outcome.Interrupts[i], string(eventID))
+		}
+		evt["outcome"] = outcome
+	case *agui.RunFinishedOutcome:
+		if outcome == nil {
+			return
+		}
+		for i := range outcome.Interrupts {
+			eventID := eventIDs[outcome.Interrupts[i].ID]
+			if eventID == "" {
+				continue
+			}
+			aistream.SetApprovalInterruptEventID(&outcome.Interrupts[i], string(eventID))
+		}
+	case map[string]any:
+		interrupts, _ := outcome["interrupts"].([]any)
+		for _, raw := range interrupts {
+			interrupt, _ := raw.(map[string]any)
+			approvalID, _ := interrupt["id"].(string)
+			eventID := eventIDs[approvalID]
+			if interrupt == nil || eventID == "" {
+				continue
+			}
+			metadata, _ := interrupt["metadata"].(map[string]any)
+			if metadata == nil {
+				metadata = map[string]any{}
+				interrupt["metadata"] = metadata
+			}
+			metadata["approvalMessageId"] = approvalID
+			metadata["approvalEventId"] = string(eventID)
+		}
 	}
 }
 
@@ -877,7 +917,7 @@ func approvalEventIDPlaceholders(prompts []aistream.ApprovalPrompt) map[string]i
 	return placeholders
 }
 
-func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *bridgev2.Portal, approvalMessage *database.Message, response agui.ToolApprovalResponse) {
+func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *bridgev2.Portal, approvalMessage *database.Message, response aistream.ToolApprovalResponse) {
 	approvalCtx, ok := dc.approvalContextForMessage(ctx, portal, approvalMessage)
 	if !ok {
 		log.Warn().Str("approval_id", messageIDString(approvalMessage)).Msg("Missing AI approval metadata")
@@ -916,7 +956,7 @@ func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *brid
 		Msg("Queued AI approval continuation")
 }
 
-func buildAIApprovalContinuationRunWithApprovals(ctx context.Context, approvalCtx aistream.ApprovalContext, approvals map[string]agui.ToolApprovalResponse, now time.Time) (aistream.Run, error) {
+func buildAIApprovalContinuationRunWithApprovals(ctx context.Context, approvalCtx aistream.ApprovalContext, approvals map[string]aistream.ToolApprovalResponse, now time.Time) (aistream.Run, error) {
 	cmd, err := parseCommand(approvalCtx.Command)
 	if err != nil {
 		return aistream.Run{}, err
@@ -950,15 +990,9 @@ func filterPendingPrompts(prompts []aistream.ApprovalPrompt, resolvedID string, 
 	if len(prompts) == 0 {
 		return nil
 	}
-	requested := make(map[string]bool, len(events))
-	for _, evt := range events {
-		if evt["type"] != agui.EventCustom || evt["name"] != agui.ApprovalCustomRequested {
-			continue
-		}
-		value, _ := evt["value"].(map[string]any)
-		if id := aistream.ApprovalIDFromRequestedValue(value); id != "" {
-			requested[id] = true
-		}
+	requested := approvalInterruptIDsFromEvents(events)
+	if len(requested) == 0 {
+		return nil
 	}
 	out := prompts[:0]
 	for _, prompt := range prompts {
@@ -973,23 +1007,60 @@ func filterPendingPrompts(prompts []aistream.ApprovalPrompt, resolvedID string, 
 	return out
 }
 
-func approvalContinuationStart(events []agui.Event, approvalID string) int {
-	for i, evt := range events {
-		if evt["type"] != agui.EventCustom || evt["name"] != agui.ApprovalCustomResponded {
+func approvalInterruptIDsFromEvents(events []agui.Event) map[string]bool {
+	requested := map[string]bool{}
+	for _, evt := range events {
+		if evt["type"] != agui.EventRunFinished {
 			continue
 		}
-		value, _ := evt["value"].(map[string]any)
-		approval, _ := value["approval"].(agui.ToolApprovalResponse)
-		if approval.ID == approvalID {
-			return i
-		}
-		if raw, ok := value["approval"].(map[string]any); ok {
-			if idValue, _ := raw["id"].(string); idValue == approvalID {
-				return i
+		switch outcome := evt["outcome"].(type) {
+		case agui.RunFinishedOutcome:
+			if outcome.Type != agui.OutcomeInterrupt {
+				continue
+			}
+			for _, interrupt := range outcome.Interrupts {
+				if interrupt.ID != "" {
+					requested[interrupt.ID] = true
+				}
+			}
+		case map[string]any:
+			if outcome["type"] != agui.OutcomeInterrupt {
+				continue
+			}
+			interrupts, _ := outcome["interrupts"].([]any)
+			for _, raw := range interrupts {
+				interrupt, _ := raw.(map[string]any)
+				if id, _ := interrupt["id"].(string); id != "" {
+					requested[id] = true
+				}
 			}
 		}
 	}
+	return requested
+}
+
+func approvalContinuationStart(events []agui.Event, approvalID string) int {
+	for i, evt := range events {
+		if evt["type"] != agui.EventToolCallResult {
+			continue
+		}
+		if toolResultApprovalID(evt) == approvalID {
+			return i
+		}
+	}
 	return -1
+}
+
+func toolResultApprovalID(evt agui.Event) string {
+	content, _ := evt["content"].(string)
+	if content == "" {
+		return ""
+	}
+	result, ok := aistream.ParseApprovalToolResult(content)
+	if !ok {
+		return ""
+	}
+	return result.ApprovalID
 }
 
 func (dc *DummyClient) approvalContextForMessage(ctx context.Context, portal *bridgev2.Portal, message *database.Message) (aistream.ApprovalContext, bool) {
@@ -1105,12 +1176,12 @@ func (dc *DummyClient) ensureAIRunSession(runID string) {
 		dc.aiRunSessions = make(map[string]*aiRunSession)
 	}
 	if dc.aiRunSessions[runID] == nil {
-		dc.aiRunSessions[runID] = &aiRunSession{Decisions: make(map[string]agui.ToolApprovalResponse)}
+		dc.aiRunSessions[runID] = &aiRunSession{Decisions: make(map[string]aistream.ToolApprovalResponse)}
 	}
 }
 
-func (dc *DummyClient) recordAIApprovalDecision(runID string, response agui.ToolApprovalResponse) map[string]agui.ToolApprovalResponse {
-	decisions := make(map[string]agui.ToolApprovalResponse)
+func (dc *DummyClient) recordAIApprovalDecision(runID string, response aistream.ToolApprovalResponse) map[string]aistream.ToolApprovalResponse {
+	decisions := make(map[string]aistream.ToolApprovalResponse)
 	if response.ID == "" {
 		return decisions
 	}
@@ -1125,7 +1196,7 @@ func (dc *DummyClient) recordAIApprovalDecision(runID string, response agui.Tool
 	}
 	session := dc.aiRunSessions[runID]
 	if session == nil {
-		session = &aiRunSession{Decisions: make(map[string]agui.ToolApprovalResponse)}
+		session = &aiRunSession{Decisions: make(map[string]aistream.ToolApprovalResponse)}
 		dc.aiRunSessions[runID] = session
 	}
 	session.Decisions[response.ID] = response

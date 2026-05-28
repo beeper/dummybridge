@@ -67,7 +67,7 @@ func hasSeedFlag(input string) bool {
 	return false
 }
 
-func buildAIRunFromCommandWithApprovals(ctx context.Context, runID, threadID string, now time.Time, cmd *parsedCommand, agentID, agentName string, approvals map[string]agui.ToolApprovalResponse) (*aistream.Run, error) {
+func buildAIRunFromCommandWithApprovals(ctx context.Context, runID, threadID string, now time.Time, cmd *parsedCommand, agentID, agentName string, approvals map[string]aistream.ToolApprovalResponse) (*aistream.Run, error) {
 	runtime := virtualAIRuntime(now)
 	run := aistream.NewRun(runID, threadID, aistream.DefaultModel, agentID, agentName, now)
 	writer := aistream.NewWriter(run, runtime.now)
@@ -87,6 +87,7 @@ func buildAIRunFromCommandWithApprovals(ctx context.Context, runID, threadID str
 		err = runner.runRandom(ctx, writer, *cmd.Random)
 	}
 	if errors.Is(err, errApprovalRequested) {
+		writer.Interrupt()
 		err = nil
 	}
 	if err != nil {

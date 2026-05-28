@@ -117,18 +117,15 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 		t.Fatalf("approval prompt ID = %q, want run-scoped ID", run.Prompts[0].ID)
 	}
 	foundToolStart := false
-	seenApprovalStateBeforeCustom := false
+	seenToolCallEndBeforeInterrupt := false
+	seenInterrupt := false
 	for _, evt := range run.Events {
 		if evt["type"] == agui.EventToolCallStart {
-			if evt["state"] != agui.ToolStateApprovalRequested {
-				t.Fatalf("expected approval-requested tool state, got %#v", evt)
+			if evt["state"] != agui.ToolStateAwaitingInput {
+				t.Fatalf("tool start should stay a normal AG-UI tool call, got %#v", evt)
 			}
-			approval, ok := evt["approval"].(*agui.ToolApproval)
-			if !ok {
-				t.Fatalf("expected tool start approval metadata, got %#v", evt["approval"])
-			}
-			if approval.ID != "approval-run-1-dummy-tool-1-shell" || !approval.NeedsApproval {
-				t.Fatalf("bad approval metadata: %#v", approval)
+			if _, ok := evt["approval"]; ok {
+				t.Fatalf("tool start must not carry Beeper approval metadata: %#v", evt)
 			}
 			metadata, ok := evt["metadata"].(map[string]any)
 			if !ok || metadata["displayName"] != "Run Command" {
@@ -137,50 +134,51 @@ func TestBuildAIRunToolsApprovalUsesAGUIApprovalAndPrompt(t *testing.T) {
 			foundToolStart = true
 		}
 		if evt["type"] == agui.EventToolCallEnd {
-			if evt["state"] == agui.ToolStateInputComplete {
-				t.Fatalf("approval tool must not downgrade to input-complete: %#v", evt)
+			if evt["state"] != agui.ToolStateInputComplete {
+				t.Fatalf("tool call should finish normally before AG-UI interrupt: %#v", evt)
 			}
-			if evt["state"] == agui.ToolStateApprovalRequested {
-				if evt["input"] != nil {
-					t.Fatalf("approval input-complete event should omit placeholder input: %#v", evt)
-				}
-				seenApprovalStateBeforeCustom = true
+			if evt["input"] != nil {
+				t.Fatalf("approval input-complete event should omit placeholder input: %#v", evt)
 			}
+			seenToolCallEndBeforeInterrupt = true
 		}
-		if evt["type"] == agui.EventCustom && evt["name"] == agui.ApprovalCustomRequested {
-			if !seenApprovalStateBeforeCustom {
-				t.Fatalf("approval custom event should be emitted after approval state update: %#v", run.Events)
+		if evt["type"] == agui.EventCustom {
+			t.Fatalf("approval must use AG-UI interrupt outcome, not custom event: %#v", evt)
+		}
+		if evt["type"] == agui.EventRunFinished {
+			if !seenToolCallEndBeforeInterrupt {
+				t.Fatalf("approval interrupt should be emitted after approval state update: %#v", run.Events)
 			}
-			value := evt["value"].(map[string]any)
-			if _, hasOptions := value["options"]; hasOptions {
-				t.Fatalf("AG-UI approval event must not embed Matrix reaction options: %#v", value)
+			interrupts := eventInterrupts(t, evt)
+			if len(interrupts) != 1 {
+				t.Fatalf("approval run should finish with one interrupt: %#v", evt)
 			}
-			if value["approvalMessageId"] != "approval-run-1-dummy-tool-1-shell" {
-				t.Fatalf("approval event should name the Matrix reaction target: %#v", value)
+			interrupt := interrupts[0]
+			if interrupt.ID != "approval-run-1-dummy-tool-1-shell" || interrupt.Reason != agui.InterruptReasonToolCall || interrupt.ToolCallID != "dummy-tool-1-shell" {
+				t.Fatalf("bad approval interrupt: %#v", interrupt)
 			}
-			metadata, ok := value["metadata"].(map[string]any)
+			metadata, ok := interrupt.Metadata["metadata"].(map[string]any)
 			if !ok || metadata["displayName"] != "Run Command" {
-				t.Fatalf("approval event should carry tool display metadata: %#v", value["metadata"])
+				t.Fatalf("approval interrupt should carry tool display metadata: %#v", interrupt.Metadata)
 			}
-			choices, ok := value["choices"].([]aistream.ApprovalChoice)
-			if !ok || len(choices) == 0 || choices[0].Key != aistream.ApprovalChoiceApprove {
-				t.Fatalf("approval event should duplicate renderer choices: %#v", value["choices"])
+			choices := approvalChoicesFromMetadata(t, interrupt.Metadata)
+			if len(choices) == 0 || choices[0].Key != aistream.ApprovalChoiceApprove {
+				t.Fatalf("approval interrupt should duplicate renderer choices: %#v", interrupt.Metadata["choices"])
 			}
-			if value["input"] != nil {
-				t.Fatalf("approval event should omit placeholder tool input: %#v", value)
+			if interrupt.Metadata["input"] != nil {
+				t.Fatalf("approval interrupt should omit placeholder tool input: %#v", interrupt.Metadata)
 			}
+			seenInterrupt = true
 		}
 	}
 	if !foundToolStart {
 		t.Fatal("missing tool start event")
 	}
-	if run.Status.State != "streaming" {
-		t.Fatalf("approval request should pause the run without terminal status, got %#v", run.Status)
+	if run.Status.State != "interrupted" {
+		t.Fatalf("approval request should interrupt the run, got %#v", run.Status)
 	}
-	for _, evt := range run.Events {
-		if evt["type"] == agui.EventRunFinished {
-			t.Fatalf("approval request should not finish the run before response: %#v", run.Events)
-		}
+	if !seenInterrupt {
+		t.Fatalf("approval request missing AG-UI interrupt outcome: %#v", run.Events)
 	}
 }
 
@@ -228,7 +226,7 @@ func TestApprovalPromptSeqStartsAtNextPackedCarrierSeq(t *testing.T) {
 		AgentName:   run.AgentName,
 		SeqStart:    prompt.SeqStart,
 	}
-	continuation, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
+	continuation, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]aistream.ToolApprovalResponse{approvalCtx.ID: {
 		ID:       prompt.ID,
 		Approved: true,
 	}}, time.Unix(20, 0))
@@ -293,35 +291,39 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var annotatedValue map[string]any
+	var annotatedInterrupt *agui.Interrupt
 	for _, carrier := range annotatedCarriers {
 		for _, env := range carrier.Envelopes {
-			if env.Part["type"] != agui.EventCustom || env.Part["name"] != agui.ApprovalCustomRequested {
+			if env.Part["type"] != agui.EventRunFinished {
 				continue
 			}
-			annotatedValue, _ = env.Part["value"].(map[string]any)
+			interrupts := eventInterrupts(t, env.Part)
+			if len(interrupts) > 0 {
+				interrupt := interrupts[0]
+				annotatedInterrupt = &interrupt
+			}
 		}
 	}
-	if annotatedValue == nil || annotatedValue["approvalMessageId"] != prompt.ID {
-		t.Fatalf("approval-requested stream event missing approval message id: %#v", annotatedValue)
+	if annotatedInterrupt == nil || annotatedInterrupt.Metadata["approvalMessageId"] != prompt.ID {
+		t.Fatalf("approval interrupt missing approval message id: %#v", annotatedInterrupt)
 	}
-	if annotatedValue["approvalEventId"] != "$approval" {
-		t.Fatalf("approval-requested stream event missing Matrix event target: %#v", annotatedValue)
+	if annotatedInterrupt.Metadata["approvalEventId"] != "$approval" {
+		t.Fatalf("approval interrupt missing Matrix event target: %#v", annotatedInterrupt)
 	}
 	annotatedCarriers = splitCarriersForTimedEmission(annotatedCarriers)
 	if annotatedNextSeq := aistream.NextSeq(annotatedCarriers); annotatedNextSeq != nextSeq {
 		t.Fatalf("approval event target changed stream sequence: initial=%d annotated=%d", nextSeq, annotatedNextSeq)
 	}
-	choices, ok := annotatedValue["choices"].([]any)
-	if !ok || len(choices) != len(aistream.DefaultApprovalChoices()) {
-		t.Fatalf("approval-requested stream event missing choices: %#v", annotatedValue["choices"])
+	choices := approvalChoicesFromMetadata(t, annotatedInterrupt.Metadata)
+	if len(choices) != len(aistream.DefaultApprovalChoices()) {
+		t.Fatalf("approval interrupt missing choices: %#v", annotatedInterrupt.Metadata["choices"])
 	}
-	firstChoice, ok := choices[0].(map[string]any)
-	if !ok || firstChoice["key"] != aistream.ApprovalChoiceApprove || firstChoice["label"] != "Allow once" {
+	firstChoice := choices[0]
+	if firstChoice.Key != aistream.ApprovalChoiceApprove || firstChoice.Label != "Allow once" {
 		t.Fatalf("approval-requested stream event has bad choice shape: %#v", choices[0])
 	}
 
-	continuation, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
+	continuation, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]aistream.ToolApprovalResponse{approvalCtx.ID: {
 		ID:       prompt.ID,
 		Approved: true,
 	}}, time.Unix(20, 0))
@@ -341,8 +343,8 @@ func TestApprovalLifecycleCarriesNoticeTargetAndContinuation(t *testing.T) {
 	if len(continuationCarriers) == 0 || len(continuationCarriers[0].Envelopes) == 0 || continuationCarriers[0].Envelopes[0].Seq != nextSeq {
 		t.Fatalf("continuation should resume at seq %d, got %#v", nextSeq, continuationCarriers)
 	}
-	if continuation.Events[0]["type"] != agui.EventCustom || continuation.Events[0]["name"] != agui.ApprovalCustomResponded {
-		t.Fatalf("continuation must start by acknowledging approval: %#v", continuation.Events)
+	if continuation.Events[0]["type"] != agui.EventToolCallResult || toolResultApprovalID(continuation.Events[0]) != prompt.ID {
+		t.Fatalf("continuation must start with approval tool result: %#v", continuation.Events)
 	}
 }
 
@@ -361,7 +363,7 @@ func TestApprovalContinuationResumesOriginalRunAfterApprovedTool(t *testing.T) {
 		AgentName:   "AI",
 		SeqStart:    12,
 	}
-	run, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
+	run, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]aistream.ToolApprovalResponse{approvalCtx.ID: {
 		ID:       approvalCtx.ID,
 		Approved: true,
 	}}, time.Unix(20, 0))
@@ -371,19 +373,16 @@ func TestApprovalContinuationResumesOriginalRunAfterApprovedTool(t *testing.T) {
 	if len(run.Events) == 0 {
 		t.Fatal("expected continuation events")
 	}
-	if run.Events[0]["type"] != agui.EventCustom || run.Events[0]["name"] != agui.ApprovalCustomResponded {
-		t.Fatalf("first continuation event should acknowledge approval, got %#v", run.Events[0])
+	if run.Events[0]["type"] != agui.EventToolCallResult || toolResultApprovalID(run.Events[0]) != approvalCtx.ID {
+		t.Fatalf("first continuation event should be approval tool result, got %#v", run.Events[0])
 	}
 	seenApprovedTool := false
 	seenLaterTool := false
 	seenFinished := false
 	for _, evt := range run.Events {
-		if evt["type"] == agui.EventToolCallEnd && evt["toolCallId"] == approvalCtx.ToolCallID {
-			if evt["state"] == agui.ToolStateApprovalResponded {
-				result := jsonResultMap(t, evt["result"])
-				if result["approved"] != true {
-					t.Fatalf("approved result missing approval state: %#v", result)
-				}
+		if evt["type"] == agui.EventToolCallResult && evt["toolCallId"] == approvalCtx.ToolCallID {
+			result := jsonResultMap(t, evt["content"])
+			if result["approved"] == true {
 				seenApprovedTool = true
 			}
 		}
@@ -420,7 +419,7 @@ func TestApprovalContinuationStopsOriginalRunAfterDeniedTool(t *testing.T) {
 		AgentName:   "AI",
 		SeqStart:    12,
 	}
-	run, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
+	run, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]aistream.ToolApprovalResponse{approvalCtx.ID: {
 		ID:       approvalCtx.ID,
 		Approved: false,
 		Reason:   "denied",
@@ -433,8 +432,8 @@ func TestApprovalContinuationStopsOriginalRunAfterDeniedTool(t *testing.T) {
 		if evt["type"] == agui.EventToolCallStart && evt["toolCallId"] == "dummy-tool-2-fetch" {
 			t.Fatalf("denied approval must not continue later tools: %#v", run.Events)
 		}
-		if evt["type"] == agui.EventToolCallEnd && evt["toolCallId"] == approvalCtx.ToolCallID && evt["state"] == agui.ToolStateApprovalResponded {
-			result := jsonResultMap(t, evt["result"])
+		if evt["type"] == agui.EventToolCallResult && evt["toolCallId"] == approvalCtx.ToolCallID {
+			result := jsonResultMap(t, evt["content"])
 			if result["state"] != agui.ToolResultStateError || result["reason"] != "denied" {
 				t.Fatalf("bad denied result: %#v", result)
 			}
@@ -455,10 +454,10 @@ func TestBuildAIRunToolsDenyProducesStructuredDeniedResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, evt := range run.Events {
-		if evt["type"] != agui.EventToolCallEnd {
+		if evt["type"] != agui.EventToolCallResult {
 			continue
 		}
-		result := jsonResultMap(t, evt["result"])
+		result := jsonResultMap(t, evt["content"])
 		if result["state"] == agui.ToolResultStateError && result["reason"] == "denied" {
 			return
 		}
@@ -471,6 +470,8 @@ func TestBuildAIRunToolsOmitPlaceholderArgsAndEmitTerminalResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	seenEnd := false
+	seenResult := false
 	for _, evt := range run.Events {
 		if evt["type"] == agui.EventToolCallArgs {
 			t.Fatalf("plain demo tool should not emit placeholder args: %#v", evt)
@@ -479,14 +480,22 @@ func TestBuildAIRunToolsOmitPlaceholderArgsAndEmitTerminalResult(t *testing.T) {
 			if evt["input"] != nil {
 				t.Fatalf("plain demo tool should omit placeholder input: %#v", evt)
 			}
-			result := jsonResultMap(t, evt["result"])
+			if _, hasResult := evt["result"]; hasResult {
+				t.Fatalf("TOOL_CALL_END must not carry result: %#v", evt)
+			}
+			seenEnd = true
+		}
+		if evt["type"] == agui.EventToolCallResult {
+			result := jsonResultMap(t, evt["content"])
 			if result["state"] != agui.ToolResultStateComplete || result["status"] != "success" {
 				t.Fatalf("plain demo tool should emit terminal success result: %#v", evt)
 			}
-			return
+			seenResult = true
 		}
 	}
-	t.Fatal("missing TOOL_CALL_END event")
+	if !seenEnd || !seenResult {
+		t.Fatalf("missing TOOL_CALL_END/TOOL_CALL_RESULT events: %#v", run.Events)
+	}
 }
 
 func TestBuildAIRunToolsPrelimUsesAGUIToolResult(t *testing.T) {
@@ -511,7 +520,7 @@ func TestBuildAIRunFinalSnapshotPreservesToolParts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var snapshot []agui.UIMessage
+	var snapshot []agui.Message
 	seenRunFinished := false
 	for _, evt := range run.Events {
 		switch evt["type"] {
@@ -520,7 +529,7 @@ func TestBuildAIRunFinalSnapshotPreservesToolParts(t *testing.T) {
 				t.Fatal("final snapshot must be emitted before RUN_FINISHED")
 			}
 			var ok bool
-			snapshot, ok = evt["messages"].([]agui.UIMessage)
+			snapshot, ok = evt["messages"].([]agui.Message)
 			if !ok {
 				t.Fatalf("bad snapshot payload: %#v", evt["messages"])
 			}
@@ -528,21 +537,21 @@ func TestBuildAIRunFinalSnapshotPreservesToolParts(t *testing.T) {
 			seenRunFinished = true
 		}
 	}
-	if len(snapshot) != 1 {
-		t.Fatalf("expected one final UI message snapshot, got %#v", snapshot)
+	if len(snapshot) == 0 {
+		t.Fatalf("expected final message snapshot, got %#v", snapshot)
 	}
 	seenToolCall := false
 	seenToolResult := false
-	for _, part := range snapshot[0].Parts {
-		switch part["type"] {
-		case "tool-call":
+	for _, message := range snapshot {
+		if message.Role == agui.RoleAssistant && len(message.ToolCalls) > 0 {
 			seenToolCall = true
-		case "tool-result":
+		}
+		if message.Role == agui.RoleTool && message.ToolCallID != "" {
 			seenToolResult = true
 		}
 	}
 	if !seenToolCall || !seenToolResult {
-		t.Fatalf("final snapshot lost tool parts: %#v", snapshot[0].Parts)
+		t.Fatalf("final snapshot lost tool messages: %#v", snapshot)
 	}
 }
 
@@ -554,22 +563,22 @@ func TestBuildAIRunToolsFailureDeltaAndInputError(t *testing.T) {
 	seenFailure := false
 	seenInputError := false
 	for _, evt := range run.Events {
-		if evt["type"] != agui.EventToolCallEnd && evt["type"] != agui.EventToolCallArgs {
+		if evt["type"] != agui.EventToolCallResult && evt["type"] != agui.EventToolCallArgs {
 			continue
 		}
 		toolCallID, _ := evt["toolCallId"].(string)
 		if evt["type"] == agui.EventToolCallArgs && strings.Contains(toolCallID, "fetch") {
 			t.Fatalf("delta tool without real input should not emit placeholder args: %#v", evt)
 		}
-		if evt["type"] == agui.EventToolCallEnd {
+		if evt["type"] == agui.EventToolCallResult {
 			if strings.Contains(toolCallID, "shell") {
-				result := jsonResultMap(t, evt["result"])
+				result := jsonResultMap(t, evt["content"])
 				if result["state"] == agui.ToolResultStateError {
 					seenFailure = true
 				}
 			}
 			if strings.Contains(toolCallID, "parser") {
-				result := jsonResultMap(t, evt["result"])
+				result := jsonResultMap(t, evt["content"])
 				if result["reason"] == "input-error" {
 					seenInputError = true
 				}
@@ -720,13 +729,11 @@ func TestRandomModeApprovalPause(t *testing.T) {
 		if run.ApprovalID == "" {
 			continue
 		}
-		for _, evt := range run.Events {
-			if evt["type"] == agui.EventRunFinished {
-				t.Fatalf("approval run emitted RUN_FINISHED with seed %d", seed)
-			}
+		if run.Status.State != "interrupted" {
+			t.Fatalf("expected approval run to interrupt, got %q", run.Status.State)
 		}
-		if run.Status.State != "streaming" {
-			t.Fatalf("expected approval run to remain streaming, got %q", run.Status.State)
+		if len(firstInterrupts(t, run.Events)) == 0 {
+			t.Fatalf("approval run missing interrupt outcome with seed %d", seed)
 		}
 		return
 	}
@@ -916,7 +923,7 @@ func TestMultiApprovalContinuationKeepsLaterPrompts(t *testing.T) {
 		AgentName:   "AI",
 		SeqStart:    12,
 	}
-	run, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
+	run, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]aistream.ToolApprovalResponse{approvalCtx.ID: {
 		ID:       approvalCtx.ID,
 		Approved: true,
 	}}, time.Unix(20, 0))
@@ -929,8 +936,11 @@ func TestMultiApprovalContinuationKeepsLaterPrompts(t *testing.T) {
 	if run.Prompts[0].ToolName != "fetch" {
 		t.Fatalf("expected preserved prompt to belong to fetch, got %#v", run.Prompts[0])
 	}
-	if run.Status.State != "streaming" {
-		t.Fatalf("expected continuation with pending approval to remain streaming, got %#v", run.Status)
+	if run.Status.State != "interrupted" {
+		t.Fatalf("expected continuation with pending approval to interrupt, got %#v", run.Status)
+	}
+	if len(firstInterrupts(t, run.Events)) != 1 {
+		t.Fatalf("expected continuation with pending approval to finish with one interrupt: %#v", run.Events)
 	}
 
 	secondCtx := aistream.ApprovalContext{
@@ -946,7 +956,7 @@ func TestMultiApprovalContinuationKeepsLaterPrompts(t *testing.T) {
 		AgentName:   approvalCtx.AgentName,
 		SeqStart:    100,
 	}
-	finished, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), secondCtx, map[string]agui.ToolApprovalResponse{
+	finished, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), secondCtx, map[string]aistream.ToolApprovalResponse{
 		approvalCtx.ID: {
 			ID:       approvalCtx.ID,
 			Approved: true,
@@ -1000,7 +1010,7 @@ func TestApprovalContinuationReplaysRandomRunWithImplicitSeed(t *testing.T) {
 			AgentName:   "AI",
 			SeqStart:    50,
 		}
-		continuation, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]agui.ToolApprovalResponse{approvalCtx.ID: {
+		continuation, err := buildAIApprovalContinuationRunWithApprovals(context.Background(), approvalCtx, map[string]aistream.ToolApprovalResponse{approvalCtx.ID: {
 			ID:       approvalCtx.ID,
 			Approved: true,
 		}}, now.Add(time.Hour))
@@ -1010,8 +1020,8 @@ func TestApprovalContinuationReplaysRandomRunWithImplicitSeed(t *testing.T) {
 		if len(continuation.Events) == 0 {
 			t.Fatalf("expected continuation events for random run, got none")
 		}
-		if continuation.Events[0]["type"] != agui.EventCustom || continuation.Events[0]["name"] != agui.ApprovalCustomResponded {
-			t.Fatalf("first continuation event should acknowledge approval, got %#v", continuation.Events[0])
+		if continuation.Events[0]["type"] != agui.EventToolCallResult || toolResultApprovalID(continuation.Events[0]) != approvalCtx.ID {
+			t.Fatalf("first continuation event should be approval tool result, got %#v", continuation.Events[0])
 		}
 		return
 	}
@@ -1054,4 +1064,91 @@ func jsonResultMap(t *testing.T, value any) map[string]any {
 		t.Fatalf("failed to parse result %q: %v", text, err)
 	}
 	return out
+}
+
+func firstInterrupts(t *testing.T, events []agui.Event) []agui.Interrupt {
+	t.Helper()
+	for _, evt := range events {
+		if evt["type"] != agui.EventRunFinished {
+			continue
+		}
+		interrupts := eventInterrupts(t, evt)
+		if len(interrupts) > 0 {
+			return interrupts
+		}
+	}
+	return nil
+}
+
+func eventInterrupts(t *testing.T, evt agui.Event) []agui.Interrupt {
+	t.Helper()
+	switch outcome := evt["outcome"].(type) {
+	case agui.RunFinishedOutcome:
+		if outcome.Type != agui.OutcomeInterrupt {
+			return nil
+		}
+		return outcome.Interrupts
+	case map[string]any:
+		if outcome["type"] != agui.OutcomeInterrupt {
+			return nil
+		}
+		rawInterrupts, ok := outcome["interrupts"].([]any)
+		if !ok {
+			t.Fatalf("bad interrupt payload: %#v", outcome["interrupts"])
+		}
+		interrupts := make([]agui.Interrupt, 0, len(rawInterrupts))
+		for _, raw := range rawInterrupts {
+			value, ok := raw.(map[string]any)
+			if !ok {
+				t.Fatalf("bad interrupt value: %#v", raw)
+			}
+			metadata, _ := value["metadata"].(map[string]any)
+			responseSchema, _ := value["responseSchema"].(map[string]any)
+			interrupts = append(interrupts, agui.Interrupt{
+				ID:             stringFromAny(value["id"]),
+				Reason:         stringFromAny(value["reason"]),
+				Message:        stringFromAny(value["message"]),
+				ToolCallID:     stringFromAny(value["toolCallId"]),
+				ExpiresAt:      stringFromAny(value["expiresAt"]),
+				ResponseSchema: responseSchema,
+				Metadata:       metadata,
+			})
+		}
+		return interrupts
+	default:
+		t.Fatalf("bad outcome payload: %#v", evt["outcome"])
+		return nil
+	}
+}
+
+func approvalChoicesFromMetadata(t *testing.T, metadata map[string]any) []aistream.ApprovalChoice {
+	t.Helper()
+	switch raw := metadata["choices"].(type) {
+	case []aistream.ApprovalChoice:
+		return raw
+	case []any:
+		choices := make([]aistream.ApprovalChoice, 0, len(raw))
+		for _, item := range raw {
+			value, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("bad approval choice: %#v", item)
+			}
+			choices = append(choices, aistream.ApprovalChoice{
+				Key:      stringFromAny(value["key"]),
+				Label:    stringFromAny(value["label"]),
+				Alias:    stringFromAny(value["alias"]),
+				Style:    stringFromAny(value["style"]),
+				Shortcut: stringFromAny(value["shortcut"]),
+			})
+		}
+		return choices
+	default:
+		t.Fatalf("bad approval choices: %#v", raw)
+		return nil
+	}
+}
+
+func stringFromAny(value any) string {
+	text, _ := value.(string)
+	return text
 }
