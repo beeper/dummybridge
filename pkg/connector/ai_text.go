@@ -84,6 +84,10 @@ func buildLoremText(chars int, rng *rand.Rand) string {
 	return trimText(sb.String(), chars)
 }
 
+func buildCompleteLoremText(chars int, rng *rand.Rand) string {
+	return trimCompleteText(buildLoremText(chars+128, rng), chars)
+}
+
 func buildDemoVisibleText(chars int, rng *rand.Rand) string {
 	if chars <= 0 {
 		return ""
@@ -96,8 +100,8 @@ func buildDemoVisibleText(chars int, rng *rand.Rand) string {
 			return buildLoremText(max(48, min(168, remaining+48)), rand.New(rand.NewSource(rng.Int63())))
 		}},
 		{weight: 4, minLen: 96, build: func(rng *rand.Rand, _ int) string {
-			return fmt.Sprintf("%s Review the [%s](%s) entry for **%s** output and _staged_ formatting transitions.",
-				buildLoremText(72+rng.Intn(48), rand.New(rand.NewSource(rng.Int63()))),
+			return fmt.Sprintf("%s\n\nReview the [%s](%s) entry for **%s** output and _staged_ formatting transitions.",
+				buildCompleteLoremText(72+rng.Intn(48), rand.New(rand.NewSource(rng.Int63()))),
 				demoMarkdownLabels[rng.Intn(len(demoMarkdownLabels))],
 				demoMarkdownURLs[rng.Intn(len(demoMarkdownURLs))],
 				demoMarkdownEmphasis[rng.Intn(len(demoMarkdownEmphasis))])
@@ -183,7 +187,7 @@ func trimVisibleText(text string, limit int) string {
 				if isMarkdownSensitiveBlock(block) {
 					kept = append(kept, trimMarkdownBlock(block, limit))
 				} else {
-					kept = append(kept, trimText(block, limit))
+					kept = append(kept, trimCompleteText(block, limit))
 				}
 			}
 			break
@@ -194,7 +198,7 @@ func trimVisibleText(text string, limit int) string {
 	if len(kept) > 0 {
 		return strings.Join(kept, "\n\n")
 	}
-	return trimText(text, limit)
+	return trimCompleteText(text, limit)
 }
 
 func isMarkdownSensitiveBlock(block string) bool {
@@ -224,12 +228,16 @@ func trimMarkdownBlock(block string, limit int) string {
 		}
 	}
 	if trimmed == "" {
-		return trimText(block, limit)
+		return trimCompleteText(block, limit)
 	}
 	return trimmed
 }
 
 func trimText(text string, limit int) string {
+	return trimCompleteText(text, limit)
+}
+
+func trimCompleteText(text string, limit int) string {
 	text = strings.TrimSpace(text)
 	if limit <= 0 || len(text) <= limit {
 		return text
@@ -241,10 +249,11 @@ func trimText(text string, limit int) string {
 			return strings.TrimSpace(text[:i])
 		}
 	}
-	for i := min(limit, len(text)); i >= minCutoff; i-- {
-		if text[i-1] == ' ' {
-			return strings.Trim(strings.TrimSpace(text[:i]), ".,;:")
+	for i := min(limit+128, len(text)); i > limit; i++ {
+		switch text[i-1] {
+		case '.', '!', '?':
+			return strings.TrimSpace(text[:i])
 		}
 	}
-	return strings.Trim(strings.TrimSpace(text[:limit]), ".,;:")
+	return text
 }

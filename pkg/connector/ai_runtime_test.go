@@ -563,6 +563,26 @@ func TestBuildAIRunFinalSnapshotPreservesToolParts(t *testing.T) {
 	}
 }
 
+func TestBuildAIRunFinalUIMessagePreservesTextToolTextOrder(t *testing.T) {
+	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream-tools 420 fetch search --seed=7 --chunk-chars=32:32", time.Unix(10, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := run.FinalBeeperAIMessage(0, true)
+	var order []string
+	for _, part := range message.Parts {
+		switch part["type"] {
+		case "text":
+			order = append(order, "text")
+		case "tool-call":
+			order = append(order, "tool-call")
+		}
+	}
+	if strings.Join(order, "|") != "text|tool-call|text|tool-call|text" {
+		t.Fatalf("final UIMessage did not preserve text/tool order: %v\nparts: %#v", order, message.Parts)
+	}
+}
+
 func TestBuildAIRunToolsFailureDeltaAndInputError(t *testing.T) {
 	run, err := buildAIRun(context.Background(), "run-1", "thread-1", "stream-tools 120 shell#fail fetch#delta parser#inputerror --seed=7 --chunk-chars=8:8", time.Unix(10, 0))
 	if err != nil {
@@ -874,6 +894,40 @@ func TestBuildDemoVisibleTextDoesNotCutMarkdownSyntax(t *testing.T) {
 			if strings.Contains(text, "https://dummybridge.") && !strings.Contains(text, "https://dummybridge.local/") {
 				t.Fatalf("cut markdown URL for chars=%d seed=%d: %q", chars, seed, text)
 			}
+			if joinedMarkdownBlockRE.MatchString(text) {
+				t.Fatalf("markdown block joined to incomplete text for chars=%d seed=%d: %q", chars, seed, text)
+			}
+		}
+	}
+}
+
+func TestSliceByStepKeepsNaturalTextUnits(t *testing.T) {
+	text := strings.Join([]string{
+		"First complete sentence. Second complete sentence.",
+		"Review the [release notes](https://dummybridge.local/docs/streaming) entry for **review-ready** output.",
+		"Third complete sentence. Fourth complete sentence.",
+	}, "\n\n")
+
+	parts := []string{
+		sliceByStep(text, 3, 0),
+		sliceByStep(text, 3, 1),
+		sliceByStep(text, 3, 2),
+	}
+	joined := strings.Join(parts, "\n\n")
+	for _, expected := range []string{
+		"First complete sentence.",
+		"Second complete sentence.",
+		"Review the [release notes](https://dummybridge.local/docs/streaming) entry for **review-ready** output.",
+		"Third complete sentence.",
+		"Fourth complete sentence.",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("sliced text lost %q:\n%#v", expected, parts)
+		}
+	}
+	for _, part := range parts {
+		if strings.HasSuffix(part, "complete") || strings.HasSuffix(part, "Review the") {
+			t.Fatalf("slice ended with a cut-off unit: %#v", parts)
 		}
 	}
 }
