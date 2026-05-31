@@ -12,6 +12,7 @@ import (
 
 	"github.com/beeper/ai-bridge/pkg/ag-ui"
 	"github.com/beeper/ai-bridge/pkg/ai-stream"
+	aimatrix "github.com/beeper/ai-bridge/pkg/ai-stream/matrix"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -675,9 +676,12 @@ func TestBuildAIRunOver64KBStreamsWithoutCarrierSizeSplit(t *testing.T) {
 	if len(aistream.ReconstructText(carriers)) < 60*1024 {
 		t.Fatalf("expected large reconstructed output, got %d", len(aistream.ReconstructText(carriers)))
 	}
-	_, segments := aistream.FinalUIMessageContent(*run, aistream.FinalMessageBudgetBytes)
-	if len(segments) == 0 {
-		t.Fatal("large final UIMessage should be segmented during finalization")
+	projection := aimatrix.ProjectFinal(*run, nil)
+	if !projection.NeedsAttachment {
+		t.Fatal("large final UIMessage should use final-parts attachment projection")
+	}
+	if len(projection.Message.Parts) == 0 {
+		t.Fatal("large final projection should preserve full UIMessage parts for attachment upload")
 	}
 }
 

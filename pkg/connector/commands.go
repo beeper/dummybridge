@@ -268,10 +268,6 @@ var FileCommand = &commands.FullHandler{
 }
 
 func runStreamCommand(e *commands.Event, name string) {
-	if e.Portal == nil {
-		e.Reply("Can only stream within a portal")
-		return
-	}
 	login := e.User.GetDefaultLogin()
 	if login == nil {
 		e.Reply("No login")
@@ -287,7 +283,11 @@ func runStreamCommand(e *commands.Event, name string) {
 		e.Reply(err.Error())
 		return
 	}
-	client.queueAIResponse(e.Ctx, e.Portal, &event.MessageEventContent{Body: body})
+	if e.Portal != nil {
+		client.queueAIResponse(e.Ctx, e.Portal, &event.MessageEventContent{Body: body})
+	} else {
+		client.queueAIResponseInRoom(e.Ctx, e.Bot, e.RoomID, &event.MessageEventContent{Body: body})
+	}
 	e.Reply("Started %s", name)
 }
 
