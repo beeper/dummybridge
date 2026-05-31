@@ -11,8 +11,6 @@ require (
 	maunium.net/go/mautrix v0.27.1-0.20260513120123-5fba7e3afae4
 )
 
-replace github.com/beeper/ai-bridge => ../ai-bridge
-
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
