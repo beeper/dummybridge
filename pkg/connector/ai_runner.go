@@ -255,7 +255,14 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 		}
 		w.ToolApprovalInputComplete(toolCallID, spec.Name, input)
 		annotateProviderRawEvent(w, spec, "tool_call_input_complete")
-		w.ToolApprovalRequestedWithMetadata(toolCallID, spec.Name, input, *approval, displayMetadata)
+		w.ToolApprovalRequestedWithRequest(aistream.ApprovalRequest{
+			ID:         approvalID,
+			ToolCallID: toolCallID,
+			ToolName:   spec.Name,
+			Input:      input,
+			Approval:   *approval,
+			Metadata:   displayMetadata,
+		})
 		annotateProviderRawEvent(w, spec, "approval_requested")
 		return errApprovalRequested
 	case spec.Deny:

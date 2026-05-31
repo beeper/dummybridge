@@ -807,6 +807,11 @@ func approvalContextForPrompt(run aistream.Run, prompt aistream.ApprovalPrompt, 
 		Command:          command,
 		ToolCallID:       prompt.ToolCallID,
 		ToolName:         prompt.ToolName,
+		Title:            prompt.Title,
+		Description:      prompt.Description,
+		PlanText:         prompt.PlanText,
+		ExpiresAt:        prompt.ExpiresAt,
+		Choices:          aistream.DefaultApprovalChoices(),
 		TargetEvent:      string(targetEventID),
 		AgentID:          run.AgentID,
 		AgentName:        run.AgentName,
@@ -814,6 +819,7 @@ func approvalContextForPrompt(run aistream.Run, prompt aistream.ApprovalPrompt, 
 		SeqStart:         prompt.SeqStart,
 		PreviewText:      run.Preview.Text,
 		PreviewTruncated: run.Preview.Truncated,
+		Metadata:         prompt.Metadata,
 	}
 }
 
@@ -894,39 +900,35 @@ func (dc *DummyClient) waitForMessageMXID(
 	if dc == nil || dc.UserLogin == nil || dc.UserLogin.Bridge == nil || dc.UserLogin.Bridge.DB == nil || portal == nil {
 		return ""
 	}
-	parent := dc.clientContext()
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
 
 	receivers := []networkid.UserLoginID{portal.Receiver}
 	if dc.UserLogin.ID != "" && dc.UserLogin.ID != portal.Receiver {
 		receivers = append(receivers, dc.UserLogin.ID)
 	}
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for ctx.Err() == nil {
-		select {
-		case <-ctx.Done():
-			return ""
-		case <-ticker.C:
+	perReceiverTimeout := timeout
+	if perReceiverTimeout <= 0 {
+		perReceiverTimeout = 5 * time.Second
+	}
+	if len(receivers) > 1 {
+		perReceiverTimeout /= time.Duration(len(receivers))
+		if perReceiverTimeout < time.Second {
+			perReceiverTimeout = time.Second
 		}
-		for _, receiver := range receivers {
-			mxid := dc.lookupMessageMXID(ctx, receiver, messageID)
-			if mxid != "" {
-				return mxid
-			}
+	}
+	for _, receiver := range receivers {
+		eventID, err := aibridgev2.WaitForMessageEventID(
+			dc.clientContext(),
+			dc.UserLogin.Bridge,
+			receiver,
+			messageID,
+			networkid.PartID("0"),
+			perReceiverTimeout,
+		)
+		if err == nil && eventID != "" {
+			return eventID
 		}
 	}
 	return ""
-}
-
-func (dc *DummyClient) lookupMessageMXID(ctx context.Context, receiver networkid.UserLoginID, messageID networkid.MessageID) id.EventID {
-	message, err := dc.lookupMessage(ctx, receiver, messageID)
-	if err != nil || message == nil {
-		return ""
-	}
-	return message.MXID
 }
 
 func (dc *DummyClient) lookupMessage(ctx context.Context, receiver networkid.UserLoginID, messageID networkid.MessageID) (*database.Message, error) {
@@ -937,22 +939,7 @@ func (dc *DummyClient) lookupMessage(ctx context.Context, receiver networkid.Use
 }
 
 func (dc *DummyClient) queueAIApprovalPrompt(portal *bridgev2.Portal, sender networkid.UserID, run aistream.Run, prompt aistream.ApprovalPrompt, targetEventID id.EventID, command string, timestamp time.Time) aistream.ApprovalContext {
-	approvalCtx := aistream.ApprovalContext{
-		ID:               prompt.ID,
-		ThreadID:         run.ThreadID,
-		RunID:            run.RunID,
-		MessageID:        run.MessageID,
-		Command:          command,
-		ToolCallID:       prompt.ToolCallID,
-		ToolName:         prompt.ToolName,
-		TargetEvent:      string(targetEventID),
-		AgentID:          run.AgentID,
-		AgentName:        run.AgentName,
-		Model:            run.Model,
-		SeqStart:         prompt.SeqStart,
-		PreviewText:      run.Preview.Text,
-		PreviewTruncated: run.Preview.Truncated,
-	}
+	approvalCtx := approvalContextForPrompt(run, prompt, targetEventID, command)
 	dc.UserLogin.QueueRemoteEvent(aibridgev2.ApprovalPrompt(portal.PortalKey, sender, approvalCtx, timestamp))
 	return approvalCtx
 }
@@ -1259,6 +1246,11 @@ func approvalContextFromMap(raw map[string]any) aistream.ApprovalContext {
 		Command:          stringField(raw, "command"),
 		ToolCallID:       stringField(raw, "toolCallId"),
 		ToolName:         stringField(raw, "toolName"),
+		Title:            stringField(raw, "title"),
+		Description:      stringField(raw, "description"),
+		PlanText:         stringField(raw, "planText"),
+		ExpiresAt:        stringField(raw, "expiresAt"),
+		Choices:          approvalChoicesField(raw, "choices"),
 		TargetEvent:      stringField(raw, "targetEvent"),
 		AgentID:          stringField(raw, "agentId"),
 		AgentName:        stringField(raw, "agentName"),
@@ -1266,6 +1258,7 @@ func approvalContextFromMap(raw map[string]any) aistream.ApprovalContext {
 		SeqStart:         intField(raw, "seqStart"),
 		PreviewText:      stringField(raw, "previewText"),
 		PreviewTruncated: boolField(raw, "previewTruncated"),
+		Metadata:         mapField(raw, "metadata"),
 	}
 }
 
@@ -1304,6 +1297,40 @@ func intField(raw map[string]any, key string) int {
 func boolField(raw map[string]any, key string) bool {
 	value, _ := raw[key].(bool)
 	return value
+}
+
+func mapField(raw map[string]any, key string) map[string]any {
+	switch value := raw[key].(type) {
+	case map[string]any:
+		return value
+	default:
+		return nil
+	}
+}
+
+func approvalChoicesField(raw map[string]any, key string) []aistream.ApprovalChoice {
+	switch value := raw[key].(type) {
+	case []aistream.ApprovalChoice:
+		return value
+	case []any:
+		choices := make([]aistream.ApprovalChoice, 0, len(value))
+		for _, item := range value {
+			rawChoice, ok := item.(map[string]any)
+			if !ok {
+				return nil
+			}
+			choices = append(choices, aistream.ApprovalChoice{
+				Key:      stringField(rawChoice, "key"),
+				Label:    stringField(rawChoice, "label"),
+				Alias:    stringField(rawChoice, "alias"),
+				Style:    stringField(rawChoice, "style"),
+				Shortcut: stringField(rawChoice, "shortcut"),
+			})
+		}
+		return choices
+	default:
+		return nil
+	}
 }
 
 func messageIDString(message *database.Message) string {

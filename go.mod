@@ -5,7 +5,7 @@ go 1.25.0
 toolchain go1.25.6
 
 require (
-	github.com/beeper/ai-bridge v0.0.0-20260524021151-5c8086351a72
+	github.com/beeper/ai-bridge v0.0.0-20260531201429-3d0bf92ccf00
 	github.com/rs/zerolog v1.35.1
 	go.mau.fi/util v0.9.9
 	maunium.net/go/mautrix v0.27.1-0.20260513120123-5fba7e3afae4
