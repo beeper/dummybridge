@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"go.mau.fi/util/jsontime"
 	"go.mau.fi/util/random"
@@ -148,8 +149,17 @@ func (dl *DummyLogin) SubmitUserInput(ctx context.Context, input map[string]stri
 	if input["password"] == "incorrectpassword" {
 		return nil, fmt.Errorf("incorrect password")
 	}
+	username := input["username"]
+	if username == "" {
+		// The login form advertises "anything goes and it's used as the ID", so an empty
+		// username must keep working. Persisting a UserLogin with an empty ID is unsafe though:
+		// with split portals enabled, an empty receiver makes GetPortalByKey fail and crashes
+		// the host app on every startup (DROID-77263). Generate a random ID instead so the login
+		// ID can never be empty.
+		username = "dummy-" + strings.ToLower(random.String(12))
+	}
 	login, err := dl.User.NewLogin(ctx, &database.UserLogin{
-		ID:         networkid.UserLoginID(input["username"]),
+		ID:         networkid.UserLoginID(username),
 		RemoteName: input["password"],
 		RemoteProfile: status.RemoteProfile{
 			Name:  input["password"],
