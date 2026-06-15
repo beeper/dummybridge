@@ -13,6 +13,7 @@ import (
 	"github.com/beeper/ai-bridge/pkg/ag-ui"
 	"github.com/beeper/ai-bridge/pkg/ai-stream"
 	aibridgev2 "github.com/beeper/ai-bridge/pkg/ai-stream/bridgev2"
+	aimatrix "github.com/beeper/ai-bridge/pkg/ai-stream/matrix"
 	"github.com/rs/zerolog/log"
 	"go.mau.fi/util/exsync"
 	"go.mau.fi/util/jsontime"
@@ -42,7 +43,7 @@ type DummyClient struct {
 }
 
 type aiRunSession struct {
-	Decisions map[string]agui.ToolApprovalResponse
+	Decisions map[string]aistream.ToolApprovalResponse
 }
 
 var _ bridgev2.NetworkAPI = (*DummyClient)(nil)
@@ -53,7 +54,9 @@ var _ bridgev2.MessageRequestAcceptingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.ReactionHandlingNetworkAPI = (*DummyClient)(nil)
 
 const (
-	dummyAIAgentName string = "Dummy"
+	dummyAIAgentName         string = "Dummy"
+	defaultAIApprovalTimeout        = 5 * time.Minute
+	demoStreamCarrierMaxSpan        = 750 * time.Millisecond
 )
 
 var delayedRemoteEchoPattern = regexp.MustCompile(`(?i)^remote-echo\s+delay\s+([0-9]+(?:ms|s|m|h))$`)
@@ -272,9 +275,6 @@ func (dc *DummyClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 	if dc == nil || dc.UserLogin == nil || msg == nil || msg.TargetMessage == nil || msg.Content == nil || msg.Portal == nil {
 		return &database.Reaction{}, nil
 	}
-	if isApprovalOptionReaction(msg) {
-		return &database.Reaction{}, nil
-	}
 	approvalID := string(msg.TargetMessage.ID)
 	if !strings.HasPrefix(approvalID, "approval-") {
 		return &database.Reaction{}, nil
@@ -315,14 +315,6 @@ func (dc *DummyClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 	logger.Msg("Resolved dummy AI approval from Matrix reaction")
 
 	return &database.Reaction{}, nil
-}
-
-func isApprovalOptionReaction(msg *bridgev2.MatrixReaction) bool {
-	if msg == nil || msg.Event == nil {
-		return false
-	}
-	_, ok := msg.Event.Content.Raw["com.beeper.ai.approval_option"]
-	return ok
 }
 
 func (dc *DummyClient) resolveApprovalOnce(approvalID, selectedKey string) (string, bool) {
@@ -526,20 +518,48 @@ func cloneMessageContent(content *event.MessageEventContent) *event.MessageEvent
 	return &cloned
 }
 
+type aiRunTarget struct {
+	portal    *bridgev2.Portal
+	bot       bridgev2.MatrixAPI
+	roomID    id.RoomID
+	threadID  string
+	sender    networkid.UserID
+	agentName string
+}
+
 func (dc *DummyClient) queueAIResponse(ctx context.Context, portal *bridgev2.Portal, inbound *event.MessageEventContent) {
 	if portal == nil {
 		return
 	}
+	dc.queueAIResponseToTarget(ctx, aiRunTarget{
+		portal:    portal,
+		threadID:  string(portal.ID),
+		sender:    dummyAISenderForPortal(portal),
+		agentName: dummyAIAgentNameForPortal(portal),
+	}, inbound)
+}
 
+func (dc *DummyClient) queueAIResponseInRoom(ctx context.Context, bot bridgev2.MatrixAPI, roomID id.RoomID, inbound *event.MessageEventContent) {
+	if bot == nil || roomID == "" {
+		return
+	}
+	dc.queueAIResponseToTarget(ctx, aiRunTarget{
+		bot:       bot,
+		roomID:    roomID,
+		threadID:  string(roomID),
+		sender:    networkid.UserID(dummyAIAgentName),
+		agentName: dummyAIAgentName,
+	}, inbound)
+}
+
+func (dc *DummyClient) queueAIResponseToTarget(ctx context.Context, target aiRunTarget, inbound *event.MessageEventContent) {
 	now := time.Now()
 	runID := "run-" + string(randomMessageID())
-	sender := dummyAISenderForPortal(portal)
-	agentName := dummyAIAgentNameForPortal(portal)
 	var body string
 	if inbound != nil {
 		body = inbound.Body
 	}
-	plans, err := buildAIRunPlans(ctx, runID, string(portal.ID), body, now, string(sender), agentName)
+	plans, err := buildAIRunPlans(ctx, runID, target.threadID, body, now, string(target.sender), target.agentName)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to build AI runs")
 		return
@@ -555,7 +575,7 @@ func (dc *DummyClient) queueAIResponse(ctx context.Context, portal *bridgev2.Por
 		}
 
 		dc.wg.Add(1)
-		go func(portal *bridgev2.Portal, sender networkid.UserID, messageID networkid.MessageID, run aistream.Run, command string, delay time.Duration) {
+		go func(target aiRunTarget, messageID networkid.MessageID, run aistream.Run, command string, delay time.Duration) {
 			defer dc.wg.Done()
 			if delay > 0 {
 				timer := time.NewTimer(delay)
@@ -566,11 +586,14 @@ func (dc *DummyClient) queueAIResponse(ctx context.Context, portal *bridgev2.Por
 					return
 				}
 			}
-			dc.ensureAISenderInvited(portal, sender)
 			anchorAt := time.Now()
-			dc.UserLogin.QueueRemoteEvent(aibridgev2.Anchor(portal.PortalKey, sender, initialAIAnchorRun(run), anchorAt))
-			dc.queueAIRunStreamAndMetadata(portal, sender, messageID, run, command, anchorAt)
-		}(portal, sender, placeholderID, *plan.Run, effectiveCommand, plan.Delay)
+			targetEventID, err := target.sendAnchor(dc, initialAIAnchorRun(run), messageID, anchorAt)
+			if err != nil {
+				log.Warn().Err(err).Str("run_id", run.RunID).Msg("Failed to send AI anchor")
+				return
+			}
+			dc.emitAIRunStream(target, messageID, targetEventID, run, command, 1, anchorAt)
+		}(target, placeholderID, *plan.Run, effectiveCommand, plan.Delay)
 	}
 }
 
@@ -581,69 +604,59 @@ func initialAIAnchorRun(run aistream.Run) aistream.Run {
 	return run
 }
 
-func (dc *DummyClient) queueAIRunStreamAndMetadata(portal *bridgev2.Portal, sender networkid.UserID, messageID networkid.MessageID, run aistream.Run, command string, anchorAt time.Time) {
-	targetEventID := dc.waitForMessageMXID(portal, messageID, 30*time.Second)
-	if targetEventID == "" {
-		log.Warn().
-			Str("run_id", run.RunID).
-			Str("message_id", string(messageID)).
-			Msg("Timed out waiting for AI anchor Matrix event")
-		return
-	}
-	dc.emitAIRunStream(portal, sender, messageID, targetEventID, run, command, 1, anchorAt)
-}
-
 // emitAIRunStream packs and emits one segment of an AI run — used both for
 // the initial run and for any approval continuation. It queues approval
 // prompts produced by the segment, repacks once approval event IDs are
 // known, and finally emits the carriers and (if the run terminated) the
 // final metadata edit.
-func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid.UserID, messageID networkid.MessageID, targetEventID id.EventID, run aistream.Run, command string, startSeq int, anchorAt time.Time) {
+func (dc *DummyClient) emitAIRunStream(target aiRunTarget, messageID networkid.MessageID, targetEventID id.EventID, run aistream.Run, command string, startSeq int, anchorAt time.Time) {
 	sizingRun := run
 	annotateApprovalEventIDs(&sizingRun, approvalEventIDPlaceholders(sizingRun.Prompts))
-	carriers, err := aistream.PackRunFromSeq(sizingRun, string(targetEventID), aistream.CarrierBudgetBytes, startSeq)
+	carriers, err := aistream.PackRunByTimeFromSeq(sizingRun, startSeq, demoStreamCarrierMaxSpan)
 	if err != nil {
 		log.Warn().Err(err).Str("run_id", run.RunID).Msg("Failed to pack AI stream")
 		return
 	}
-	carriers = splitCarriersForTimedEmission(carriers)
 	nextSeq := aistream.NextSeq(carriers)
-	queuedPrompts := run.Prompts
-	if len(queuedPrompts) > 1 {
+	approvalQueue := aistream.NewApprovalQueue(aistream.ApprovalTimeout{After: defaultAIApprovalTimeout})
+	approvalQueue.AddAll(run.Prompts)
+	activePrompt, hasActivePrompt := approvalQueue.Active()
+	if pending := approvalQueue.Pending(); len(pending) > 0 {
 		log.Warn().
 			Str("run_id", run.RunID).
-			Int("approval_prompts", len(queuedPrompts)).
-			Msg("AI run produced multiple simultaneous approval prompts; queueing the first prompt only")
-		queuedPrompts = queuedPrompts[:1]
+			Int("pending_approval_prompts", len(pending)).
+			Msg("AI run produced multiple approval prompts; keeping one active interrupt and queueing the rest")
 	}
-	approvalEventIDs := make(map[string]id.EventID, len(queuedPrompts))
-	for _, prompt := range queuedPrompts {
+	approvalEventIDs := make(map[string]id.EventID, 1)
+	if hasActivePrompt {
+		prompt := activePrompt
 		prompt.SeqStart = nextSeq
-		ctx := dc.queueAIApprovalPrompt(portal, sender, run, prompt, targetEventID, command, time.Now())
-		if approvalEventID := dc.waitForMessageMXID(portal, networkid.MessageID(ctx.ID), 10*time.Second); approvalEventID != "" {
-			approvalEventIDs[ctx.ID] = approvalEventID
+		approvalCtx, approvalEventID, err := target.sendApprovalPrompt(dc, run, prompt, targetEventID, command, time.Now())
+		if err == nil && approvalEventID != "" {
+			target.scheduleApprovalTimeout(dc, approvalCtx, approvalQueue.Timeout())
+			approvalEventIDs[approvalCtx.ID] = approvalEventID
 			log.Info().
 				Str("run_id", run.RunID).
-				Str("approval_id", ctx.ID).
+				Str("approval_id", approvalCtx.ID).
 				Stringer("approval_event_id", approvalEventID).
-				Int("approval_seq_start", ctx.SeqStart).
+				Int("approval_seq_start", approvalCtx.SeqStart).
 				Msg("AI approval notice ready for reaction")
 		} else {
 			log.Warn().
+				Err(err).
 				Str("run_id", run.RunID).
-				Str("approval_id", ctx.ID).
-				Int("approval_seq_start", ctx.SeqStart).
+				Str("approval_id", approvalCtx.ID).
+				Int("approval_seq_start", approvalCtx.SeqStart).
 				Msg("Timed out waiting for AI approval notice Matrix event")
 		}
 	}
 	if len(approvalEventIDs) > 0 {
 		annotateApprovalEventIDs(&run, approvalEventIDs)
-		carriers, err = aistream.PackRunFromSeq(run, string(targetEventID), aistream.CarrierBudgetBytes, startSeq)
+		carriers, err = aistream.PackRunByTimeFromSeq(run, startSeq, demoStreamCarrierMaxSpan)
 		if err != nil {
 			log.Warn().Err(err).Str("run_id", run.RunID).Msg("Failed to repack AI stream with approval event IDs")
 			return
 		}
-		carriers = splitCarriersForTimedEmission(carriers)
 		if actualNextSeq := aistream.NextSeq(carriers); actualNextSeq != nextSeq {
 			log.Warn().
 				Str("run_id", run.RunID).
@@ -652,13 +665,12 @@ func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid
 				Msg("AI approval event ID repack changed stream sequence count")
 			return
 		}
-	} else if len(queuedPrompts) > 0 {
+	} else if hasActivePrompt {
 		log.Info().
 			Str("run_id", run.RunID).
-			Int("approval_prompts", len(queuedPrompts)).
 			Msg("Sending approval stream without approval event IDs")
 	}
-	dc.queuePackedAICarriers(portal, sender, targetEventID, run, carriers, startSeq, anchorAt)
+	target.sendCarriers(dc, targetEventID, run, carriers, startSeq, anchorAt)
 	if len(run.Prompts) > 0 && run.Status.State == "streaming" {
 		log.Info().
 			Str("run_id", run.RunID).
@@ -667,8 +679,37 @@ func (dc *DummyClient) emitAIRunStream(portal *bridgev2.Portal, sender networkid
 			Msg("AI run paused for approval")
 	}
 	if run.Status.State != "streaming" {
-		dc.queueAIRunFinalMetadata(portal, sender, messageID, run)
+		target.sendFinal(dc, messageID, targetEventID, run, time.Now())
 	}
+}
+
+func (dc *DummyClient) scheduleAIApprovalTimeout(portal *bridgev2.Portal, approvalMessageID networkid.MessageID, timeout aistream.ApprovalTimeout) {
+	if dc == nil || portal == nil || approvalMessageID == "" || timeout.After <= 0 {
+		return
+	}
+	dc.wg.Add(1)
+	go func() {
+		defer dc.wg.Done()
+		timer := time.NewTimer(timeout.After)
+		defer timer.Stop()
+		select {
+		case <-dc.clientContext().Done():
+			return
+		case <-timer.C:
+		}
+		approvalID := string(approvalMessageID)
+		if _, firstResolution := dc.resolveApprovalOnce(approvalID, timeout.Reason); !firstResolution {
+			return
+		}
+		ctx := dc.clientContext()
+		approvalMessage, err := dc.lookupMessage(ctx, portal.Receiver, approvalMessageID)
+		if err != nil || approvalMessage == nil {
+			log.Warn().Err(err).Str("approval_id", approvalID).Msg("Timed-out AI approval message was not found")
+			return
+		}
+		response := aistream.TimedOutApprovalResponse(approvalID)
+		dc.queueAIApprovalResponse(ctx, portal, approvalMessage, response)
+	}()
 }
 
 func (dc *DummyClient) queuePackedAICarriers(portal *bridgev2.Portal, sender networkid.UserID, targetEventID id.EventID, run aistream.Run, carriers []aistream.Carrier, startSeq int, anchorAt time.Time) {
@@ -691,22 +732,161 @@ func (dc *DummyClient) queuePackedAICarriers(portal *bridgev2.Portal, sender net
 	}
 }
 
-func splitCarriersForTimedEmission(carriers []aistream.Carrier) []aistream.Carrier {
-	out := make([]aistream.Carrier, 0, len(carriers))
-	for _, carrier := range carriers {
-		if len(carrier.Envelopes) <= 1 {
-			out = append(out, carrier)
-			continue
+func (target aiRunTarget) sendAnchor(dc *DummyClient, run aistream.Run, messageID networkid.MessageID, timestamp time.Time) (id.EventID, error) {
+	if target.portal != nil {
+		dc.ensureAISenderInvited(target.portal, target.sender)
+		dc.UserLogin.QueueRemoteEvent(aibridgev2.Anchor(target.portal.PortalKey, target.sender, run, timestamp))
+		eventID := dc.waitForMessageMXID(target.portal, messageID, 30*time.Second)
+		if eventID == "" {
+			return "", fmt.Errorf("timed out waiting for AI anchor Matrix event")
 		}
-		for _, env := range carrier.Envelopes {
-			out = append(out, aistream.Carrier{Envelopes: []aistream.Envelope{env}})
+		return eventID, nil
+	}
+	content, extra := aimatrix.AnchorContent(run)
+	return dc.sendAIMessageToRoom(target.bot, target.roomID, content, extra, timestamp)
+}
+
+func (target aiRunTarget) sendApprovalPrompt(dc *DummyClient, run aistream.Run, prompt aistream.ApprovalPrompt, targetEventID id.EventID, command string, timestamp time.Time) (aistream.ApprovalContext, id.EventID, error) {
+	approvalCtx := approvalContextForPrompt(run, prompt, targetEventID, command)
+	if target.portal != nil {
+		approvalCtx = dc.queueAIApprovalPrompt(target.portal, target.sender, run, prompt, targetEventID, command, timestamp)
+		eventID := dc.waitForMessageMXID(target.portal, networkid.MessageID(approvalCtx.ID), 10*time.Second)
+		if eventID == "" {
+			return approvalCtx, "", fmt.Errorf("timed out waiting for AI approval notice Matrix event")
+		}
+		return approvalCtx, eventID, nil
+	}
+	eventID, err := dc.sendAIApprovalPromptToRoom(target.bot, target.roomID, approvalCtx, timestamp)
+	return approvalCtx, eventID, err
+}
+
+func (target aiRunTarget) scheduleApprovalTimeout(dc *DummyClient, approvalCtx aistream.ApprovalContext, timeout aistream.ApprovalTimeout) {
+	if target.portal != nil {
+		dc.scheduleAIApprovalTimeout(target.portal, networkid.MessageID(approvalCtx.ID), timeout)
+		return
+	}
+	if dc == nil || target.bot == nil || target.roomID == "" || approvalCtx.ID == "" || timeout.After <= 0 {
+		return
+	}
+	dc.wg.Add(1)
+	go func() {
+		defer dc.wg.Done()
+		timer := time.NewTimer(timeout.After)
+		defer timer.Stop()
+		select {
+		case <-dc.clientContext().Done():
+			return
+		case <-timer.C:
+		}
+		if _, firstResolution := dc.resolveApprovalOnce(approvalCtx.ID, timeout.Reason); !firstResolution {
+			return
+		}
+		response := aistream.TimedOutApprovalResponse(approvalCtx.ID)
+		approvals := dc.recordAIApprovalDecision(approvalCtx.RunID, response)
+		run, err := buildAIApprovalContinuationRunWithApprovals(dc.clientContext(), approvalCtx, approvals, time.Now())
+		if err != nil {
+			log.Warn().Err(err).Str("approval_id", approvalCtx.ID).Msg("Failed to build timed-out AI approval continuation")
+			return
+		}
+		dc.emitAIRunStream(target, networkid.MessageID(approvalCtx.MessageID), id.EventID(approvalCtx.TargetEvent), run, approvalCtx.Command, approvalCtx.SeqStart, time.Now())
+	}()
+}
+
+func (target aiRunTarget) sendCarriers(dc *DummyClient, targetEventID id.EventID, run aistream.Run, carriers []aistream.Carrier, startSeq int, anchorAt time.Time) {
+	if target.portal != nil {
+		dc.queuePackedAICarriers(target.portal, target.sender, targetEventID, run, carriers, startSeq, anchorAt)
+		return
+	}
+	dc.sendPackedAICarriersToRoom(target.bot, target.roomID, targetEventID, run, carriers, startSeq, anchorAt)
+}
+
+func (target aiRunTarget) sendFinal(dc *DummyClient, messageID networkid.MessageID, targetEventID id.EventID, run aistream.Run, timestamp time.Time) {
+	if target.portal != nil {
+		dc.queueAIRunFinalMetadata(target.portal, target.sender, messageID, run)
+		return
+	}
+	dc.sendAIRunFinalToRoom(target.bot, target.roomID, targetEventID, run, timestamp)
+}
+
+func approvalContextForPrompt(run aistream.Run, prompt aistream.ApprovalPrompt, targetEventID id.EventID, command string) aistream.ApprovalContext {
+	return aistream.ApprovalContext{
+		ID:               prompt.ID,
+		ThreadID:         run.ThreadID,
+		RunID:            run.RunID,
+		MessageID:        run.MessageID,
+		Command:          command,
+		ToolCallID:       prompt.ToolCallID,
+		ToolName:         prompt.ToolName,
+		Title:            prompt.Title,
+		Description:      prompt.Description,
+		PlanText:         prompt.PlanText,
+		ExpiresAt:        prompt.ExpiresAt,
+		Choices:          aistream.DefaultApprovalChoices(),
+		TargetEvent:      string(targetEventID),
+		AgentID:          run.AgentID,
+		AgentName:        run.AgentName,
+		Model:            run.Model,
+		SeqStart:         prompt.SeqStart,
+		PreviewText:      run.Preview.Text,
+		PreviewTruncated: run.Preview.Truncated,
+		Metadata:         prompt.Metadata,
+	}
+}
+
+func (dc *DummyClient) sendAIApprovalPromptToRoom(bot bridgev2.MatrixAPI, roomID id.RoomID, approvalCtx aistream.ApprovalContext, timestamp time.Time) (id.EventID, error) {
+	content, extra := aimatrix.ApprovalContent(approvalCtx, aistream.DefaultApprovalChoices())
+	return dc.sendAIMessageToRoom(bot, roomID, content, extra, timestamp)
+}
+
+func (dc *DummyClient) sendPackedAICarriersToRoom(bot bridgev2.MatrixAPI, roomID id.RoomID, targetEventID id.EventID, run aistream.Run, carriers []aistream.Carrier, startSeq int, anchorAt time.Time) {
+	streamStart := time.Now()
+	minCarrierTimestamp := anchorAt.Add(time.Millisecond)
+	if streamStart.Before(minCarrierTimestamp) {
+		streamStart = minCarrierTimestamp
+	}
+	for i, carrier := range carriers {
+		dc.sleepUntilCarrierTime(run, carrier, streamStart)
+		now := time.Now()
+		if now.Before(minCarrierTimestamp) {
+			now = minCarrierTimestamp
+		}
+		minCarrierTimestamp = now.Add(time.Nanosecond)
+		content, extra := aimatrix.CarrierContent(run, carrier, targetEventID)
+		if _, err := dc.sendAIMessageToRoom(bot, roomID, content, extra, now); err != nil {
+			log.Warn().Err(err).Str("run_id", run.RunID).Int("carrier_index", startSeq+i).Msg("Failed to send AI stream carrier to Matrix room")
+			return
 		}
 	}
-	return out
+}
+
+func (dc *DummyClient) sendAIRunFinalToRoom(bot bridgev2.MatrixAPI, roomID id.RoomID, targetEventID id.EventID, run aistream.Run, timestamp time.Time) {
+	content, extra := aimatrix.FinalContent(run)
+	content.SetEdit(targetEventID)
+	raw := map[string]any{
+		"m.new_content":                 extra,
+		"com.beeper.dont_render_edited": true,
+	}
+	if _, err := dc.sendAIMessageToRoom(bot, roomID, content, raw, timestamp); err != nil {
+		log.Warn().Err(err).Str("run_id", run.RunID).Msg("Failed to send AI final edit to Matrix room")
+	}
+}
+
+func (dc *DummyClient) sendAIMessageToRoom(bot bridgev2.MatrixAPI, roomID id.RoomID, content *event.MessageEventContent, extra map[string]any, timestamp time.Time) (id.EventID, error) {
+	resp, err := bot.SendMessage(dc.clientContext(), roomID, event.EventMessage, &event.Content{
+		Parsed: content,
+		Raw:    extra,
+	}, &bridgev2.MatrixSendExtra{Timestamp: timestamp})
+	if err != nil {
+		return "", err
+	}
+	if resp == nil {
+		return "", nil
+	}
+	return resp.EventID, nil
 }
 
 func (dc *DummyClient) sleepUntilCarrierTime(run aistream.Run, carrier aistream.Carrier, streamStart time.Time) {
-	target := carrierTimestamp(run, carrier, streamStart)
+	target := aistream.CarrierTimestamp(run, carrier, streamStart)
 	if target.IsZero() {
 		return
 	}
@@ -722,66 +902,6 @@ func (dc *DummyClient) sleepUntilCarrierTime(run aistream.Run, carrier aistream.
 	}
 }
 
-func carrierTimestamp(run aistream.Run, carrier aistream.Carrier, streamStart time.Time) time.Time {
-	base := runStartTimestamp(run)
-	if base.IsZero() {
-		return time.Time{}
-	}
-	var latest time.Time
-	for _, env := range carrier.Envelopes {
-		eventTime := eventTimestamp(env.Part)
-		if eventTime.IsZero() {
-			continue
-		}
-		if latest.IsZero() || eventTime.After(latest) {
-			latest = eventTime
-		}
-	}
-	if latest.IsZero() {
-		return time.Time{}
-	}
-	return streamStart.Add(latest.Sub(base))
-}
-
-func runStartTimestamp(run aistream.Run) time.Time {
-	for _, evt := range run.Events {
-		if ts := eventTimestamp(evt); !ts.IsZero() {
-			return ts
-		}
-	}
-	return time.Time{}
-}
-
-func eventTimestamp(evt agui.Event) time.Time {
-	raw, ok := evt["timestamp"]
-	if !ok {
-		return time.Time{}
-	}
-	var millis int64
-	switch value := raw.(type) {
-	case int64:
-		millis = value
-	case int:
-		millis = int64(value)
-	case int32:
-		millis = int64(value)
-	case float64:
-		millis = int64(value)
-	case json.Number:
-		parsed, err := value.Int64()
-		if err != nil {
-			return time.Time{}
-		}
-		millis = parsed
-	default:
-		return time.Time{}
-	}
-	if millis <= 0 {
-		return time.Time{}
-	}
-	return time.UnixMilli(millis)
-}
-
 func (dc *DummyClient) waitForMessageMXID(
 	portal *bridgev2.Portal,
 	messageID networkid.MessageID,
@@ -790,65 +910,47 @@ func (dc *DummyClient) waitForMessageMXID(
 	if dc == nil || dc.UserLogin == nil || dc.UserLogin.Bridge == nil || dc.UserLogin.Bridge.DB == nil || portal == nil {
 		return ""
 	}
-	parent := dc.clientContext()
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
 
 	receivers := []networkid.UserLoginID{portal.Receiver}
 	if dc.UserLogin.ID != "" && dc.UserLogin.ID != portal.Receiver {
 		receivers = append(receivers, dc.UserLogin.ID)
 	}
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for ctx.Err() == nil {
-		select {
-		case <-ctx.Done():
-			return ""
-		case <-ticker.C:
+	perReceiverTimeout := timeout
+	if perReceiverTimeout <= 0 {
+		perReceiverTimeout = 5 * time.Second
+	}
+	if len(receivers) > 1 {
+		perReceiverTimeout /= time.Duration(len(receivers))
+		if perReceiverTimeout < time.Second {
+			perReceiverTimeout = time.Second
 		}
-		for _, receiver := range receivers {
-			mxid := dc.lookupMessageMXID(ctx, receiver, messageID)
-			if mxid != "" {
-				return mxid
-			}
+	}
+	for _, receiver := range receivers {
+		eventID, err := aibridgev2.WaitForMessageEventID(
+			dc.clientContext(),
+			dc.UserLogin.Bridge,
+			receiver,
+			messageID,
+			networkid.PartID("0"),
+			perReceiverTimeout,
+		)
+		if err == nil && eventID != "" {
+			return eventID
 		}
 	}
 	return ""
 }
 
-func (dc *DummyClient) lookupMessageMXID(ctx context.Context, receiver networkid.UserLoginID, messageID networkid.MessageID) id.EventID {
-	message, err := dc.UserLogin.Bridge.DB.Message.GetFirstPartByID(ctx, receiver, messageID)
-	if err != nil || message == nil {
-		return ""
+func (dc *DummyClient) lookupMessage(ctx context.Context, receiver networkid.UserLoginID, messageID networkid.MessageID) (*database.Message, error) {
+	if dc == nil || dc.UserLogin == nil || dc.UserLogin.Bridge == nil || dc.UserLogin.Bridge.DB == nil {
+		return nil, nil
 	}
-	return message.MXID
+	return dc.UserLogin.Bridge.DB.Message.GetFirstPartByID(ctx, receiver, messageID)
 }
 
 func (dc *DummyClient) queueAIApprovalPrompt(portal *bridgev2.Portal, sender networkid.UserID, run aistream.Run, prompt aistream.ApprovalPrompt, targetEventID id.EventID, command string, timestamp time.Time) aistream.ApprovalContext {
-	choices := aistream.DefaultApprovalChoices()
-	approvalCtx := aistream.ApprovalContext{
-		ID:               prompt.ID,
-		ThreadID:         run.ThreadID,
-		RunID:            run.RunID,
-		MessageID:        run.MessageID,
-		Command:          command,
-		ToolCallID:       prompt.ToolCallID,
-		ToolName:         prompt.ToolName,
-		TargetEvent:      string(targetEventID),
-		AgentID:          run.AgentID,
-		AgentName:        run.AgentName,
-		Model:            run.Model,
-		SeqStart:         prompt.SeqStart,
-		PreviewText:      run.Preview.Text,
-		PreviewTruncated: run.Preview.Truncated,
-	}
+	approvalCtx := approvalContextForPrompt(run, prompt, targetEventID, command)
 	dc.UserLogin.QueueRemoteEvent(aibridgev2.ApprovalPrompt(portal.PortalKey, sender, approvalCtx, timestamp))
-
-	for i, choice := range choices {
-		choice := choice
-		dc.UserLogin.QueueRemoteEvent(aibridgev2.ApprovalOptionReaction(portal.PortalKey, sender, approvalCtx, choice, timestamp.Add(time.Duration(i+1)*time.Millisecond)))
-	}
 	return approvalCtx
 }
 
@@ -856,20 +958,43 @@ func annotateApprovalEventIDs(run *aistream.Run, eventIDs map[string]id.EventID)
 	if run == nil || len(eventIDs) == 0 {
 		return
 	}
-	for _, evt := range run.Events {
-		if evt["type"] != agui.EventCustom || evt["name"] != agui.ApprovalCustomRequested {
-			continue
-		}
-		value, _ := evt["value"].(map[string]any)
-		if value == nil {
-			continue
-		}
-		approvalID := aistream.ApprovalIDFromRequestedValue(value)
-		eventID := eventIDs[approvalID]
+	for i := range run.Interrupts {
+		eventID := eventIDs[run.Interrupts[i].ID]
 		if eventID == "" {
 			continue
 		}
-		aistream.SetApprovalRequestedEventID(value, string(eventID))
+		aistream.SetApprovalInterruptEventID(&run.Interrupts[i], string(eventID))
+	}
+	for _, evt := range run.Events {
+		if evt.Type() != agui.EventRunFinished {
+			continue
+		}
+		annotateApprovalOutcomeEventIDs(evt, eventIDs)
+	}
+}
+
+func annotateApprovalOutcomeEventIDs(evt agui.Event, eventIDs map[string]id.EventID) {
+	switch outcome := evt.Get("outcome").(type) {
+	case agui.RunFinishedOutcome:
+		for i := range outcome.Interrupts {
+			eventID := eventIDs[outcome.Interrupts[i].ID]
+			if eventID == "" {
+				continue
+			}
+			aistream.SetApprovalInterruptEventID(&outcome.Interrupts[i], string(eventID))
+		}
+		evt.Set("outcome", outcome)
+	case *agui.RunFinishedOutcome:
+		if outcome == nil {
+			return
+		}
+		for i := range outcome.Interrupts {
+			eventID := eventIDs[outcome.Interrupts[i].ID]
+			if eventID == "" {
+				continue
+			}
+			aistream.SetApprovalInterruptEventID(&outcome.Interrupts[i], string(eventID))
+		}
 	}
 }
 
@@ -887,7 +1012,7 @@ func approvalEventIDPlaceholders(prompts []aistream.ApprovalPrompt) map[string]i
 	return placeholders
 }
 
-func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *bridgev2.Portal, approvalMessage *database.Message, response agui.ToolApprovalResponse) {
+func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *bridgev2.Portal, approvalMessage *database.Message, response aistream.ToolApprovalResponse) {
 	approvalCtx, ok := dc.approvalContextForMessage(ctx, portal, approvalMessage)
 	if !ok {
 		log.Warn().Str("approval_id", messageIDString(approvalMessage)).Msg("Missing AI approval metadata")
@@ -912,8 +1037,12 @@ func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *brid
 	if sender == "" {
 		sender = dummyAISenderForPortal(portal)
 	}
-	dc.ensureAISenderInvited(portal, sender)
-	dc.emitAIRunStream(portal, sender, networkid.MessageID(approvalCtx.MessageID), targetEventID, run, approvalCtx.Command, approvalCtx.SeqStart, now)
+	dc.emitAIRunStream(aiRunTarget{
+		portal:    portal,
+		threadID:  approvalCtx.ThreadID,
+		sender:    sender,
+		agentName: approvalCtx.AgentName,
+	}, networkid.MessageID(approvalCtx.MessageID), targetEventID, run, approvalCtx.Command, approvalCtx.SeqStart, now)
 	log.Info().
 		Str("run_id", approvalCtx.RunID).
 		Str("approval_id", approvalCtx.ID).
@@ -926,7 +1055,7 @@ func (dc *DummyClient) queueAIApprovalResponse(ctx context.Context, portal *brid
 		Msg("Queued AI approval continuation")
 }
 
-func buildAIApprovalContinuationRunWithApprovals(ctx context.Context, approvalCtx aistream.ApprovalContext, approvals map[string]agui.ToolApprovalResponse, now time.Time) (aistream.Run, error) {
+func buildAIApprovalContinuationRunWithApprovals(ctx context.Context, approvalCtx aistream.ApprovalContext, approvals map[string]aistream.ToolApprovalResponse, now time.Time) (aistream.Run, error) {
 	cmd, err := parseCommand(approvalCtx.Command)
 	if err != nil {
 		return aistream.Run{}, err
@@ -946,13 +1075,19 @@ func buildAIApprovalContinuationRunWithApprovals(ctx context.Context, approvalCt
 	run.RunID = approvalCtx.RunID
 	run.ThreadID = approvalCtx.ThreadID
 	run.MessageID = approvalCtx.MessageID
-	run.ToolCallID = approvalCtx.ToolCallID
-	run.ApprovalID = approvalCtx.ID
 	// Keep only prompts that the continuation segment newly emitted (i.e.
 	// approvals raised by tools that ran AFTER the resolved one). The
 	// already-resolved approval has been removed from the event range above
 	// and must not be queued again.
 	run.Prompts = filterPendingPrompts(run.Prompts, approvalCtx.ID, run.Events)
+	run.Interrupts = filterPendingInterrupts(run.Interrupts, run.Prompts, run.Events)
+	if len(run.Prompts) > 0 {
+		run.ApprovalID = run.Prompts[0].ID
+		run.ToolCallID = run.Prompts[0].ToolCallID
+	} else {
+		run.ApprovalID = ""
+		run.ToolCallID = ""
+	}
 	return *run, nil
 }
 
@@ -960,15 +1095,9 @@ func filterPendingPrompts(prompts []aistream.ApprovalPrompt, resolvedID string, 
 	if len(prompts) == 0 {
 		return nil
 	}
-	requested := make(map[string]bool, len(events))
-	for _, evt := range events {
-		if evt["type"] != agui.EventCustom || evt["name"] != agui.ApprovalCustomRequested {
-			continue
-		}
-		value, _ := evt["value"].(map[string]any)
-		if id := aistream.ApprovalIDFromRequestedValue(value); id != "" {
-			requested[id] = true
-		}
+	requested := approvalInterruptIDsFromEvents(events)
+	if len(requested) == 0 {
+		return nil
 	}
 	out := prompts[:0]
 	for _, prompt := range prompts {
@@ -983,23 +1112,85 @@ func filterPendingPrompts(prompts []aistream.ApprovalPrompt, resolvedID string, 
 	return out
 }
 
-func approvalContinuationStart(events []agui.Event, approvalID string) int {
-	for i, evt := range events {
-		if evt["type"] != agui.EventCustom || evt["name"] != agui.ApprovalCustomResponded {
+func filterPendingInterrupts(interrupts []agui.Interrupt, prompts []aistream.ApprovalPrompt, events []agui.Event) []agui.Interrupt {
+	if len(prompts) == 0 {
+		return nil
+	}
+	pending := make(map[string]bool, len(prompts))
+	for _, prompt := range prompts {
+		pending[prompt.ID] = true
+	}
+	var out []agui.Interrupt
+	for _, interrupt := range approvalInterruptsFromEvents(events) {
+		if pending[interrupt.ID] {
+			out = append(out, interrupt)
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	for _, interrupt := range interrupts {
+		if pending[interrupt.ID] {
+			out = append(out, interrupt)
+		}
+	}
+	return out
+}
+
+func approvalInterruptIDsFromEvents(events []agui.Event) map[string]bool {
+	requested := map[string]bool{}
+	for _, interrupt := range approvalInterruptsFromEvents(events) {
+		if interrupt.ID != "" {
+			requested[interrupt.ID] = true
+		}
+	}
+	return requested
+}
+
+func approvalInterruptsFromEvents(events []agui.Event) []agui.Interrupt {
+	var interrupts []agui.Interrupt
+	for _, evt := range events {
+		if evt.Type() != agui.EventRunFinished {
 			continue
 		}
-		value, _ := evt["value"].(map[string]any)
-		approval, _ := value["approval"].(agui.ToolApprovalResponse)
-		if approval.ID == approvalID {
-			return i
-		}
-		if raw, ok := value["approval"].(map[string]any); ok {
-			if idValue, _ := raw["id"].(string); idValue == approvalID {
-				return i
+		switch outcome := evt.Get("outcome").(type) {
+		case agui.RunFinishedOutcome:
+			if outcome.Type != agui.OutcomeInterrupt {
+				continue
 			}
+			interrupts = append(interrupts, outcome.Interrupts...)
+		case *agui.RunFinishedOutcome:
+			if outcome == nil || outcome.Type != agui.OutcomeInterrupt {
+				continue
+			}
+			interrupts = append(interrupts, outcome.Interrupts...)
+		}
+	}
+	return interrupts
+}
+
+func approvalContinuationStart(events []agui.Event, approvalID string) int {
+	for i, evt := range events {
+		if evt.Type() != agui.EventToolCallResult {
+			continue
+		}
+		if toolResultApprovalID(evt) == approvalID {
+			return i
 		}
 	}
 	return -1
+}
+
+func toolResultApprovalID(evt agui.Event) string {
+	content, _ := evt.Get("content").(string)
+	if content == "" {
+		return ""
+	}
+	result, ok := aistream.ParseApprovalToolResult(content)
+	if !ok {
+		return ""
+	}
+	return result.ApprovalID
 }
 
 func (dc *DummyClient) approvalContextForMessage(ctx context.Context, portal *bridgev2.Portal, message *database.Message) (aistream.ApprovalContext, bool) {
@@ -1044,44 +1235,112 @@ func approvalContextFromAny(value any) (aistream.ApprovalContext, bool) {
 		}
 		return validApprovalContext(*typed)
 	case map[string]any:
-		if nested, ok := typed["com.beeper.ai.approval"]; ok {
+		if nested, ok := typed[aistream.BeeperAIApprovalKey]; ok {
 			return approvalContextFromAny(nested)
 		}
-	case *map[string]any:
-		if typed == nil {
-			return aistream.ApprovalContext{}, false
-		}
-		return approvalContextFromAny(*typed)
+		return validApprovalContext(approvalContextFromMap(typed))
 	case json.RawMessage:
 		return approvalContextFromJSON(typed)
 	case []byte:
 		return approvalContextFromJSON(typed)
-	case string:
-		return approvalContextFromJSON([]byte(typed))
 	}
-	var ctx aistream.ApprovalContext
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return aistream.ApprovalContext{}, false
+	return aistream.ApprovalContext{}, false
+}
+
+func approvalContextFromMap(raw map[string]any) aistream.ApprovalContext {
+	return aistream.ApprovalContext{
+		ID:               stringField(raw, "id"),
+		ThreadID:         stringField(raw, "threadId"),
+		RunID:            stringField(raw, "runId"),
+		MessageID:        stringField(raw, "messageId"),
+		Command:          stringField(raw, "command"),
+		ToolCallID:       stringField(raw, "toolCallId"),
+		ToolName:         stringField(raw, "toolName"),
+		Title:            stringField(raw, "title"),
+		Description:      stringField(raw, "description"),
+		PlanText:         stringField(raw, "planText"),
+		ExpiresAt:        stringField(raw, "expiresAt"),
+		Choices:          approvalChoicesField(raw, "choices"),
+		TargetEvent:      stringField(raw, "targetEvent"),
+		AgentID:          stringField(raw, "agentId"),
+		AgentName:        stringField(raw, "agentName"),
+		Model:            stringField(raw, "model"),
+		SeqStart:         intField(raw, "seqStart"),
+		PreviewText:      stringField(raw, "previewText"),
+		PreviewTruncated: boolField(raw, "previewTruncated"),
+		Metadata:         mapField(raw, "metadata"),
 	}
-	if err = json.Unmarshal(raw, &ctx); err != nil {
-		return aistream.ApprovalContext{}, false
-	}
-	return validApprovalContext(ctx)
 }
 
 func approvalContextFromJSON(raw []byte) (aistream.ApprovalContext, bool) {
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err == nil {
-		if approvalCtx, ok := approvalContextFromAny(decoded); ok {
+	var ctx aistream.ApprovalContext
+	if err := json.Unmarshal(raw, &ctx); err == nil {
+		if approvalCtx, ok := validApprovalContext(ctx); ok {
 			return approvalCtx, true
 		}
 	}
-	var ctx aistream.ApprovalContext
-	if err := json.Unmarshal(raw, &ctx); err != nil {
+	var wrapper map[string]any
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
 		return aistream.ApprovalContext{}, false
 	}
-	return validApprovalContext(ctx)
+	return approvalContextFromAny(wrapper)
+}
+
+func stringField(raw map[string]any, key string) string {
+	value, _ := raw[key].(string)
+	return value
+}
+
+func intField(raw map[string]any, key string) int {
+	switch value := raw[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func boolField(raw map[string]any, key string) bool {
+	value, _ := raw[key].(bool)
+	return value
+}
+
+func mapField(raw map[string]any, key string) map[string]any {
+	switch value := raw[key].(type) {
+	case map[string]any:
+		return value
+	default:
+		return nil
+	}
+}
+
+func approvalChoicesField(raw map[string]any, key string) []aistream.ApprovalChoice {
+	switch value := raw[key].(type) {
+	case []aistream.ApprovalChoice:
+		return value
+	case []any:
+		choices := make([]aistream.ApprovalChoice, 0, len(value))
+		for _, item := range value {
+			rawChoice, ok := item.(map[string]any)
+			if !ok {
+				return nil
+			}
+			choices = append(choices, aistream.ApprovalChoice{
+				Key:      stringField(rawChoice, "key"),
+				Label:    stringField(rawChoice, "label"),
+				Alias:    stringField(rawChoice, "alias"),
+				Style:    stringField(rawChoice, "style"),
+				Shortcut: stringField(rawChoice, "shortcut"),
+			})
+		}
+		return choices
+	default:
+		return nil
+	}
 }
 
 func messageIDString(message *database.Message) string {
@@ -1115,12 +1374,12 @@ func (dc *DummyClient) ensureAIRunSession(runID string) {
 		dc.aiRunSessions = make(map[string]*aiRunSession)
 	}
 	if dc.aiRunSessions[runID] == nil {
-		dc.aiRunSessions[runID] = &aiRunSession{Decisions: make(map[string]agui.ToolApprovalResponse)}
+		dc.aiRunSessions[runID] = &aiRunSession{Decisions: make(map[string]aistream.ToolApprovalResponse)}
 	}
 }
 
-func (dc *DummyClient) recordAIApprovalDecision(runID string, response agui.ToolApprovalResponse) map[string]agui.ToolApprovalResponse {
-	decisions := make(map[string]agui.ToolApprovalResponse)
+func (dc *DummyClient) recordAIApprovalDecision(runID string, response aistream.ToolApprovalResponse) map[string]aistream.ToolApprovalResponse {
+	decisions := make(map[string]aistream.ToolApprovalResponse)
 	if response.ID == "" {
 		return decisions
 	}
@@ -1135,7 +1394,7 @@ func (dc *DummyClient) recordAIApprovalDecision(runID string, response agui.Tool
 	}
 	session := dc.aiRunSessions[runID]
 	if session == nil {
-		session = &aiRunSession{Decisions: make(map[string]agui.ToolApprovalResponse)}
+		session = &aiRunSession{Decisions: make(map[string]aistream.ToolApprovalResponse)}
 		dc.aiRunSessions[runID] = session
 	}
 	session.Decisions[response.ID] = response

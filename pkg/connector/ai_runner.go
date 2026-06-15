@@ -204,9 +204,9 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 	toolCallID := fmt.Sprintf("dummy-tool-%d-%s", spec.SequenceIndex, sanitizeToolName(spec.Name))
 	input := toolRequestInput(spec)
 	approvalID := approvalIDForRun(w.Run.RunID, toolCallID)
-	var approval *agui.ToolApproval
+	var approval *aistream.ToolApproval
 	if spec.Approval {
-		approval = &agui.ToolApproval{ID: approvalID, NeedsApproval: true}
+		approval = &aistream.ToolApproval{ID: approvalID, NeedsApproval: true}
 	}
 	displayMetadata := toolDisplayMetadata(spec.Name)
 	w.ToolStartWithMetadata(toolCallID, spec.Name, spec.SequenceIndex-1, approval, displayMetadata)
@@ -255,7 +255,14 @@ func (r aiRunner) runToolSpec(ctx context.Context, w *aistream.Writer, spec tool
 		}
 		w.ToolApprovalInputComplete(toolCallID, spec.Name, input)
 		annotateProviderRawEvent(w, spec, "tool_call_input_complete")
-		w.ToolApprovalRequestedWithMetadata(toolCallID, spec.Name, input, *approval, displayMetadata)
+		w.ToolApprovalRequestedWithRequest(aistream.ApprovalRequest{
+			ID:         approvalID,
+			ToolCallID: toolCallID,
+			ToolName:   spec.Name,
+			Input:      input,
+			Approval:   *approval,
+			Metadata:   displayMetadata,
+		})
 		annotateProviderRawEvent(w, spec, "approval_requested")
 		return errApprovalRequested
 	case spec.Deny:
@@ -330,13 +337,13 @@ func annotateProviderRawEvent(w *aistream.Writer, spec toolSpec, stage string) {
 	if !spec.Provider || w == nil || w.Run == nil || len(w.Run.Events) == 0 {
 		return
 	}
-	w.Run.Events[len(w.Run.Events)-1]["rawEvent"] = map[string]any{
+	w.Run.Events[len(w.Run.Events)-1].Set("rawEvent", map[string]any{
 		"provider": "dummybridge",
 		"stage":    stage,
 		"tool":     spec.Name,
 		"sequence": spec.SequenceIndex,
 		"tags":     spec.Tags,
-	}
+	})
 }
 
 func jsonToolInput(input any) string {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/beeper/ai-bridge/pkg/ag-ui"
 	"github.com/beeper/ai-bridge/pkg/ai-stream"
 )
 
@@ -142,7 +141,7 @@ type aiRuntime struct {
 
 type aiRunner struct {
 	runtime   aiRuntime
-	approvals map[string]agui.ToolApprovalResponse
+	approvals map[string]aistream.ToolApprovalResponse
 }
 
 type aiRunPlan struct {

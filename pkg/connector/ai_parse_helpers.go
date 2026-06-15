@@ -146,16 +146,89 @@ func sliceByStep(text string, parts, index int) string {
 	if parts <= 1 || text == "" {
 		return text
 	}
-	start := 0
-	for i := 0; i < index; i++ {
-		start += splitCount(len(text), parts, i)
-	}
-	length := splitCount(len(text), parts, index)
-	if start >= len(text) || length <= 0 {
+	units := naturalTextUnits(text)
+	if len(units) == 0 {
 		return ""
 	}
-	end := min(start+length, len(text))
-	return text[start:end]
+	if parts >= len(units) {
+		if index >= 0 && index < len(units) {
+			return units[index]
+		}
+		return ""
+	}
+
+	cumulative := make([]int, len(units)+1)
+	for i, unit := range units {
+		cumulative[i+1] = cumulative[i] + len(unit) + 2
+	}
+	boundary := func(step int) int {
+		if step <= 0 {
+			return 0
+		}
+		if step >= parts {
+			return len(units)
+		}
+		target := cumulative[len(units)] * step / parts
+		out := 0
+		for out < len(units) && cumulative[out] < target {
+			out++
+		}
+		if out < step {
+			out = step
+		}
+		maxBoundary := len(units) - (parts - step)
+		if out > maxBoundary {
+			out = maxBoundary
+		}
+		return out
+	}
+	start := boundary(index)
+	end := boundary(index + 1)
+	if start >= end || start < 0 || end > len(units) {
+		return ""
+	}
+	return strings.Join(units[start:end], "\n\n")
+}
+
+func naturalTextUnits(text string) []string {
+	var units []string
+	for _, block := range strings.Split(text, "\n\n") {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		if isMarkdownSensitiveBlock(block) {
+			units = append(units, block)
+			continue
+		}
+		units = append(units, splitSentences(block)...)
+	}
+	return units
+}
+
+func splitSentences(text string) []string {
+	var sentences []string
+	start := 0
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '.', '!', '?':
+			if i+1 < len(text) && text[i+1] != ' ' && text[i+1] != '\n' {
+				continue
+			}
+			sentence := strings.TrimSpace(text[start : i+1])
+			if sentence != "" {
+				sentences = append(sentences, sentence)
+			}
+			start = i + 1
+			for start < len(text) && (text[start] == ' ' || text[start] == '\n') {
+				start++
+			}
+		}
+	}
+	if tail := strings.TrimSpace(text[start:]); tail != "" {
+		sentences = append(sentences, tail)
+	}
+	return sentences
 }
 
 func sanitizeToolName(name string) string {
