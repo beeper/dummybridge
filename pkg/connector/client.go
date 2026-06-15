@@ -117,7 +117,17 @@ func (dc *DummyClient) Connect(ctx context.Context) {
 			); errors.Is(err, context.Canceled) {
 				return
 			} else if err != nil {
-				panic(err)
+				// Never panic here: a persistent error (e.g. an empty login ID failing
+				// GetPortalByKey under split portals) would otherwise boot-loop crash the
+				// host app on every startup (DROID-77263). Report a bridge-state error and
+				// stop generating instead.
+				log.Err(err).Msg("Failed to generate portal after login")
+				dc.UserLogin.BridgeState.Send(status.BridgeState{
+					StateEvent: status.StateUnknownError,
+					Error:      "dummy-generate-portal-failed",
+					Message:    err.Error(),
+				})
+				return
 			}
 		}
 	}()
