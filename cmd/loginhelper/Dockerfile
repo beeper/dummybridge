@@ -1,4 +1,4 @@
-FROM golang:1-alpine3.20 AS builder
+FROM golang:1-alpine3.24 AS builder
 
 RUN apk add --no-cache build-base
 
@@ -7,7 +7,7 @@ WORKDIR /build
 ENV CGO_ENABLED=1
 RUN go build -o /usr/bin/loginhelper ./cmd/loginhelper
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /usr/bin/loginhelper /usr/bin/loginhelper
