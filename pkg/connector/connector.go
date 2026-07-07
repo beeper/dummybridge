@@ -104,6 +104,10 @@ func (dc *DummyConnector) GetLoginFlows() []bridgev2.LoginFlow {
 		Name:        "Display and wait",
 		Description: "Log in through a remote server",
 		ID:          "displayandwait",
+	}, {
+		Name:        "WebAuthn",
+		Description: "Log in with a passkey",
+		ID:          "webauthn",
 	}}
 }
 

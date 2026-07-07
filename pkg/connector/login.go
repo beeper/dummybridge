@@ -3,11 +3,13 @@ package connector
 import (
 	"context"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"go.mau.fi/util/jsonbytes"
 	"go.mau.fi/util/jsontime"
 	"go.mau.fi/util/random"
 	"maunium.net/go/mautrix/bridgev2"
@@ -110,6 +112,24 @@ func (dl *DummyLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 				Data: dl.DAWID,
 			},
 		}, nil
+	case "webauthn":
+		return &bridgev2.LoginStep{
+			Type:   bridgev2.LoginStepTypeWebAuthn,
+			StepID: "com.beeper.dummy.webauthn",
+			WebAuthnParams: &bridgev2.LoginWebAuthnParams{
+				URL: "https://web.whatsapp.com",
+				PublicKey: json.RawMessage(`{
+					"challenge": "DPgmHAR2lKUoayChDUcaUfoNu5U32XhZ0Vq5z5x2yfc",
+					"timeout": 600000,
+					"rpId": "whatsapp.com",
+					"allowCredentials": [],
+					"userVerification": "required",
+					"extensions": {
+						"uvm": true
+					}
+				}`),
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown flow ID %q", dl.FlowID)
 	}
@@ -189,6 +209,34 @@ func (dl *DummyLogin) SubmitUserInput(ctx context.Context, input map[string]stri
 			UserLogin:   login,
 		},
 	}, nil
+}
+
+type WebAuthnResponse struct {
+	ID       string                     `json:"id"`
+	RawID    jsonbytes.UnpaddedURLBytes `json:"rawId"`
+	Type     string                     `json:"type"`
+	Response WebAuthnResponseData       `json:"response"`
+}
+
+type WebAuthnResponseData struct {
+	ClientDataJSON    jsonbytes.UnpaddedURLBytes  `json:"clientDataJSON"`
+	AuthenticatorData jsonbytes.UnpaddedURLBytes  `json:"authenticatorData"`
+	Signature         jsonbytes.UnpaddedURLBytes  `json:"signature"`
+	UserHandle        *jsonbytes.UnpaddedURLBytes `json:"userHandle"`
+}
+
+func (dl *DummyLogin) SubmitWebAuthnResponse(ctx context.Context, response json.RawMessage) (*bridgev2.LoginStep, error) {
+	var respStruct WebAuthnResponse
+	err := json.Unmarshal(response, &respStruct)
+	if err != nil {
+		return nil, err
+	} else if respStruct.Response.UserHandle == nil {
+		return nil, fmt.Errorf("userHandle is nil in WebAuthn response")
+	}
+	return dl.SubmitUserInput(ctx, map[string]string{
+		"username": base64.RawURLEncoding.EncodeToString(*respStruct.Response.UserHandle),
+		"password": base32.StdEncoding.EncodeToString(respStruct.Response.Signature),
+	})
 }
 
 func (dl *DummyLogin) Cancel() {}
