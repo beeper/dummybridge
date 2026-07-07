@@ -113,13 +113,11 @@ func createMessageRequestPortal(
 		Type:           ptr.Ptr(roomType),
 		MessageRequest: &isMessageRequest,
 		CanBackfill:    true,
-		Members: &bridgev2.ChatMemberList{MemberMap: bridgev2.ChatMemberMap{
-			networkid.UserID(login.ID): {
-				EventSender: bridgev2.EventSender{IsFromMe: true, Sender: networkid.UserID(login.ID)},
-				Membership:  event.MembershipJoin,
-				PowerLevel:  ptr.Ptr(100),
-			},
-		}},
+		Members: &bridgev2.ChatMemberList{Members: []bridgev2.ChatMember{{
+			EventSender: bridgev2.EventSender{IsFromMe: true, Sender: networkid.UserID(login.ID)},
+			Membership:  event.MembershipJoin,
+			PowerLevel:  ptr.Ptr(100),
+		}}},
 	}
 
 	firstGhost := stablePortalUserIDByIndex(portalID, 0)
@@ -130,7 +128,7 @@ func createMessageRequestPortal(
 			return nil, fmt.Errorf("failed to get ghost by id: %w", err)
 		}
 		ghost.UpdateName(ctx, fmt.Sprintf("Dummy User %d", i+1))
-		chatInfo.Members.MemberMap.Set(bridgev2.ChatMember{
+		chatInfo.Members.Members = append(chatInfo.Members.Members, bridgev2.ChatMember{
 			EventSender: bridgev2.EventSender{Sender: userID},
 			Membership:  event.MembershipJoin,
 		})
