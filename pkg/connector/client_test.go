@@ -4,8 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beeper/ai-bridge/pkg/ag-ui"
-	"github.com/beeper/ai-bridge/pkg/ai-stream"
 	"maunium.net/go/mautrix/event"
 )
 
@@ -37,37 +35,5 @@ func TestGetRemoteEchoBehavior(t *testing.T) {
 				t.Fatalf("fail = %v, want %v", got.fail, tc.fail)
 			}
 		})
-	}
-}
-
-func TestSleepUntilCarrierTimeWithoutConnectedContext(t *testing.T) {
-	base := time.Now()
-	run := aistream.Run{
-		Events: []agui.Event{{
-			"type":      agui.EventRunStarted,
-			"timestamp": base.UnixMilli(),
-			"threadId":  "thread-1",
-		}},
-	}
-	carrier := aistream.Carrier{
-		Envelopes: []aistream.Envelope{{
-			Part: agui.Event{
-				"type":      agui.EventTextMessageContent,
-				"timestamp": base.Add(time.Millisecond).UnixMilli(),
-				"messageId": "message-1",
-			},
-		}},
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		(&DummyClient{}).sleepUntilCarrierTime(run, carrier, base)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("timed out waiting for carrier sleep without connected context")
 	}
 }

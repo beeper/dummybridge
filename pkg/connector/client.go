@@ -140,17 +140,6 @@ func (dc *DummyClient) Disconnect() {
 	dc.wg.Wait()
 }
 
-func (dc *DummyClient) clientContext() context.Context {
-	if dc != nil && dc.ctx != nil {
-		return dc.ctx
-	}
-	return context.Background()
-}
-
-func (dc *DummyClient) done() <-chan struct{} {
-	return dc.clientContext().Done()
-}
-
 func (dc *DummyClient) IsLoggedIn() bool {
 	return true
 }
@@ -301,7 +290,7 @@ func (dc *DummyClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 	dc.wg.Add(1)
 	go func() {
 		defer dc.wg.Done()
-		dc.queueAIApprovalResponse(dc.clientContext(), portal, target, response)
+		dc.queueAIApprovalResponse(dc.ctx, portal, target, response)
 	}()
 
 	logger := log.Info().
@@ -491,7 +480,7 @@ func (dc *DummyClient) queueRemoteEcho(msg *bridgev2.MatrixMessage, transactionI
 		defer timer.Stop()
 
 		select {
-		case <-dc.done():
+		case <-dc.ctx.Done():
 			return
 		case <-timer.C:
 		}
@@ -561,7 +550,7 @@ func (dc *DummyClient) queueAIResponse(ctx context.Context, portal *bridgev2.Por
 				timer := time.NewTimer(delay)
 				select {
 				case <-timer.C:
-				case <-dc.done():
+				case <-dc.ctx.Done():
 					timer.Stop()
 					return
 				}
@@ -717,7 +706,7 @@ func (dc *DummyClient) sleepUntilCarrierTime(run aistream.Run, carrier aistream.
 	timer := time.NewTimer(delay)
 	select {
 	case <-timer.C:
-	case <-dc.done():
+	case <-dc.ctx.Done():
 		timer.Stop()
 	}
 }
@@ -790,7 +779,10 @@ func (dc *DummyClient) waitForMessageMXID(
 	if dc == nil || dc.UserLogin == nil || dc.UserLogin.Bridge == nil || dc.UserLogin.Bridge.DB == nil || portal == nil {
 		return ""
 	}
-	parent := dc.clientContext()
+	parent := dc.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
