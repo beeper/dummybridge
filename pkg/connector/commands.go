@@ -22,6 +22,7 @@ import (
 
 var AllCommands = []commands.CommandHandler{
 	SendStateCommand,
+	ChallengeCommand,
 	NewRoomCommand,
 	NewRequestDMCommand,
 	NewRequestGroupCommand,
@@ -54,6 +55,29 @@ var SendStateCommand = &commands.FullHandler{
 	Help: commands.HelpMeta{
 		Description: "Send bridge states",
 		Args:        "[sevent]",
+		Section:     DummyHelpsection,
+	},
+	RequiresLogin: true,
+}
+
+var ChallengeCommand = &commands.FullHandler{
+	Func: func(e *commands.Event) {
+		login := e.User.GetDefaultLogin()
+		if login == nil {
+			e.Reply("No login")
+			return
+		}
+		dc, ok := login.Client.(*DummyClient)
+		if !ok {
+			e.Reply("Login client is not a DummyClient")
+			return
+		}
+		dc.triggerChallenge()
+		e.Reply("Sent BAD_CREDENTIALS + RELOGIN with info.challenge=true. Run the reauth flow to clear it.")
+	},
+	Name: "challenge",
+	Help: commands.HelpMeta{
+		Description: "Simulate a runtime challenge (BAD_CREDENTIALS with a pending challenge)",
 		Section:     DummyHelpsection,
 	},
 	RequiresLogin: true,

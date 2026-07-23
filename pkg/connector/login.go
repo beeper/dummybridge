@@ -240,3 +240,45 @@ func (dl *DummyLogin) SubmitWebAuthnResponse(ctx context.Context, response json.
 }
 
 func (dl *DummyLogin) Cancel() {}
+
+type DummyChallenge struct {
+	client *DummyClient
+}
+
+var _ bridgev2.LoginProcessUserInput = (*DummyChallenge)(nil)
+
+func (dc *DummyChallenge) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
+	return &bridgev2.LoginStep{
+		Type:         bridgev2.LoginStepTypeUserInput,
+		StepID:       "com.beeper.dummy.challenge",
+		Instructions: "Dummy challenge: enter anything to clear it.",
+		UserInputParams: &bridgev2.LoginUserInputParams{
+			Fields: []bridgev2.LoginInputDataField{{
+				Type: bridgev2.LoginInputFieldTypeCaptchaCode,
+				ID:   "captcha_code",
+				Name: "Enter anything to pass the dummy challenge",
+			}},
+		},
+	}, nil
+}
+
+func (dc *DummyChallenge) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
+	login := dc.client.UserLogin
+	dc.client.challengePending.Store(false)
+	login.BridgeState.Send(status.BridgeState{
+		StateEvent: status.StateConnected,
+		Timestamp:  jsontime.UnixNow(),
+	})
+	// complete with the same userloginid so mautrix reuses the existing login
+	return &bridgev2.LoginStep{
+		Type:         bridgev2.LoginStepTypeComplete,
+		StepID:       "com.beeper.dummy.challenge.complete",
+		Instructions: "Challenge cleared",
+		CompleteParams: &bridgev2.LoginCompleteParams{
+			UserLoginID: login.ID,
+			UserLogin:   login,
+		},
+	}, nil
+}
+
+func (dc *DummyChallenge) Cancel() {}

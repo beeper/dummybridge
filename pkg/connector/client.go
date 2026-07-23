@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -28,6 +29,8 @@ type DummyClient struct {
 
 	UserLogin *bridgev2.UserLogin
 	Connector *DummyConnector
+
+	challengePending atomic.Bool
 }
 
 var _ bridgev2.NetworkAPI = (*DummyClient)(nil)
@@ -35,6 +38,7 @@ var _ bridgev2.IdentifierResolvingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.BackfillingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.DeleteChatHandlingNetworkAPI = (*DummyClient)(nil)
 var _ bridgev2.MessageRequestAcceptingNetworkAPI = (*DummyClient)(nil)
+var _ bridgev2.ChallengeProvidingNetworkAPI = (*DummyClient)(nil)
 
 var delayedRemoteEchoPattern = regexp.MustCompile(`(?i)^remote-echo\s+delay\s+([0-9]+(?:ms|s|m|h))$`)
 
@@ -113,6 +117,23 @@ func (dc *DummyClient) Connect(ctx context.Context) {
 	}()
 }
 
+func (dc *DummyClient) triggerChallenge() {
+	dc.challengePending.Store(true)
+	dc.UserLogin.BridgeState.Send(status.BridgeState{
+		StateEvent: status.StateBadCredentials,
+		UserAction: status.UserActionRelogin,
+		Info:       map[string]any{status.BridgeStateInfoPendingChallenge: true},
+		Timestamp:  jsontime.UnixNow(),
+	})
+}
+
+func (dc *DummyClient) Challenge(ctx context.Context) (bridgev2.LoginProcess, error) {
+	if !dc.challengePending.Load() {
+		return nil, nil
+	}
+	return &DummyChallenge{client: dc}, nil
+}
+
 func (dc *DummyClient) Disconnect() {
 	if dc.stop != nil {
 		dc.stop()
@@ -172,6 +193,10 @@ func (tc *DummyClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (
 }
 
 func (dc *DummyClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (message *bridgev2.MatrixMessageResponse, err error) {
+	if msg.Content != nil && strings.EqualFold(strings.TrimSpace(msg.Content.Body), "challenge") {
+		dc.triggerChallenge()
+	}
+
 	// Dummy message requests are accepted by sending a message.
 	if msg.Portal != nil && msg.Portal.MessageRequest {
 		msg.Portal.MessageRequest = false
