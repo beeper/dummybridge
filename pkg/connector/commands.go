@@ -72,12 +72,21 @@ var ChallengeCommand = &commands.FullHandler{
 			e.Reply("Login client is not a DummyClient")
 			return
 		}
-		dc.triggerChallenge()
-		e.Reply("Sent BAD_CREDENTIALS + RELOGIN with info.challenge=true. Run the reauth flow to clear it.")
+		flavor := ChallengeFlavorInput
+		if len(e.Args) > 0 {
+			flavor = strings.ToLower(e.Args[0])
+		}
+		if !IsValidChallengeFlavor(flavor) {
+			e.Reply("unknown challenge flavor %q (valid: input, cookies, special, hidden)", flavor)
+			return
+		}
+		dc.triggerChallenge(flavor)
+		e.Reply("sent `BAD_CREDENTIALS` `RELOGIN` w/ pending %s challenge, run the reauth flow to clear", flavor)
 	},
 	Name: "challenge",
 	Help: commands.HelpMeta{
 		Description: "Simulate a runtime challenge (BAD_CREDENTIALS with a pending challenge)",
+		Args:        "[input|cookies|special|hidden]",
 		Section:     DummyHelpsection,
 	},
 	RequiresLogin: true,

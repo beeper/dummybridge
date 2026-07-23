@@ -30,7 +30,13 @@ type DummyClient struct {
 	UserLogin *bridgev2.UserLogin
 	Connector *DummyConnector
 
-	challengePending atomic.Bool
+	challengePending    atomic.Bool
+	challengeFlavorSlot atomic.Value
+}
+
+func (dc *DummyClient) challengeFlavor() string {
+	flavor, _ := dc.challengeFlavorSlot.Load().(string)
+	return flavor
 }
 
 var _ bridgev2.NetworkAPI = (*DummyClient)(nil)
@@ -117,7 +123,8 @@ func (dc *DummyClient) Connect(ctx context.Context) {
 	}()
 }
 
-func (dc *DummyClient) triggerChallenge() {
+func (dc *DummyClient) triggerChallenge(flavor string) {
+	dc.challengeFlavorSlot.Store(flavor)
 	dc.challengePending.Store(true)
 	dc.UserLogin.BridgeState.Send(status.BridgeState{
 		StateEvent: status.StateBadCredentials,
@@ -193,8 +200,17 @@ func (tc *DummyClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (
 }
 
 func (dc *DummyClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (message *bridgev2.MatrixMessageResponse, err error) {
-	if msg.Content != nil && strings.EqualFold(strings.TrimSpace(msg.Content.Body), "challenge") {
-		dc.triggerChallenge()
+	if msg.Content != nil {
+		words := strings.Fields(strings.ToLower(strings.TrimSpace(msg.Content.Body)))
+		if len(words) >= 1 && len(words) <= 2 && words[0] == "challenge" {
+			flavor := ChallengeFlavorInput
+			if len(words) == 2 {
+				flavor = words[1]
+			}
+			if IsValidChallengeFlavor(flavor) {
+				dc.triggerChallenge(flavor)
+			}
+		}
 	}
 
 	// Dummy message requests are accepted by sending a message.

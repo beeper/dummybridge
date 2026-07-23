@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"go.mau.fi/util/jsonbytes"
@@ -241,44 +243,122 @@ func (dl *DummyLogin) SubmitWebAuthnResponse(ctx context.Context, response json.
 
 func (dl *DummyLogin) Cancel() {}
 
+const (
+	ChallengeFlavorInput   = "input"   // user_input step with a captcha_code field
+	ChallengeFlavorCookies = "cookies" // cookies step extracting cookies from a webview
+	ChallengeFlavorSpecial = "special" // cookies step with only a special field filled by ExtractJS
+	ChallengeFlavorHidden  = "hidden"  // like special, but the webview is never shown
+)
+
+func IsValidChallengeFlavor(flavor string) bool {
+	switch flavor {
+	case ChallengeFlavorInput, ChallengeFlavorCookies, ChallengeFlavorSpecial, ChallengeFlavorHidden:
+		return true
+	}
+	return false
+}
+
 type DummyChallenge struct {
 	client *DummyClient
 }
 
 var _ bridgev2.LoginProcessUserInput = (*DummyChallenge)(nil)
+var _ bridgev2.LoginProcessCookies = (*DummyChallenge)(nil)
+
+const challengeExtractJS = `new Promise(resolve => setTimeout(
+	() => resolve({dummy_token: "dummy-" + Math.random().toString(36).slice(2)}),
+	5000,
+))`
 
 func (dc *DummyChallenge) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
-	return &bridgev2.LoginStep{
-		Type:         bridgev2.LoginStepTypeUserInput,
-		StepID:       "com.beeper.dummy.challenge",
-		Instructions: "Dummy challenge: enter anything to clear it.",
-		UserInputParams: &bridgev2.LoginUserInputParams{
-			Fields: []bridgev2.LoginInputDataField{{
-				Type: bridgev2.LoginInputFieldTypeCaptchaCode,
-				ID:   "captcha_code",
-				Name: "Enter anything to pass the dummy challenge",
-			}},
-		},
-	}, nil
+	switch dc.client.challengeFlavor() {
+	case ChallengeFlavorCookies:
+		return &bridgev2.LoginStep{
+			Type:         bridgev2.LoginStepTypeCookies,
+			StepID:       "com.beeper.dummy.challenge.cookies",
+			Instructions: "Dummy cookie challenge: submit the form to clear it.",
+			CookiesParams: &bridgev2.LoginCookiesParams{
+				URL: "https://random.mau.fi/dummy/pages/cookies.html",
+				Fields: []bridgev2.LoginCookieField{{
+					ID:       "username",
+					Required: true,
+					Sources: []bridgev2.LoginCookieFieldSource{{
+						Type:         bridgev2.LoginCookieTypeCookie,
+						Name:         "username",
+						CookieDomain: "random.mau.fi",
+					}},
+				}, {
+					ID:       "password",
+					Required: true,
+					Sources: []bridgev2.LoginCookieFieldSource{{
+						Type:         bridgev2.LoginCookieTypeCookie,
+						Name:         "password",
+						CookieDomain: "random.mau.fi",
+					}},
+				}},
+			},
+		}, nil
+	case ChallengeFlavorSpecial, ChallengeFlavorHidden:
+		return &bridgev2.LoginStep{
+			Type:         bridgev2.LoginStepTypeCookies,
+			StepID:       "com.beeper.dummy.challenge.special",
+			Instructions: "Dummy special challenge: wait a few seconds for the extraction script to resolve.",
+			CookiesParams: &bridgev2.LoginCookiesParams{
+				URL:       "https://random.mau.fi/dummy/pages/cookies.html",
+				ExtractJS: challengeExtractJS,
+				Hidden:    dc.client.challengeFlavor() == ChallengeFlavorHidden,
+				Fields: []bridgev2.LoginCookieField{{
+					ID:       "dummy_token",
+					Required: true,
+					Sources: []bridgev2.LoginCookieFieldSource{{
+						Type: bridgev2.LoginCookieTypeSpecial,
+						Name: "com.beeper.dummy.token",
+					}},
+				}},
+			},
+		}, nil
+	default:
+		return &bridgev2.LoginStep{
+			Type:         bridgev2.LoginStepTypeUserInput,
+			StepID:       "com.beeper.dummy.challenge",
+			Instructions: "Dummy challenge: enter anything to clear it.",
+			UserInputParams: &bridgev2.LoginUserInputParams{
+				Fields: []bridgev2.LoginInputDataField{{
+					Type: bridgev2.LoginInputFieldTypeCaptchaCode,
+					ID:   "captcha_code",
+					Name: "Enter anything to pass the dummy challenge",
+				}},
+			},
+		}, nil
+	}
 }
 
 func (dc *DummyChallenge) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
+	return dc.clear(input), nil
+}
+
+func (dc *DummyChallenge) SubmitCookies(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
+	return dc.clear(input), nil
+}
+
+func (dc *DummyChallenge) clear(input map[string]string) *bridgev2.LoginStep {
 	login := dc.client.UserLogin
 	dc.client.challengePending.Store(false)
 	login.BridgeState.Send(status.BridgeState{
 		StateEvent: status.StateConnected,
 		Timestamp:  jsontime.UnixNow(),
 	})
+	received := slices.Sorted(maps.Keys(input))
 	// complete with the same userloginid so mautrix reuses the existing login
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeComplete,
 		StepID:       "com.beeper.dummy.challenge.complete",
-		Instructions: "Challenge cleared",
+		Instructions: fmt.Sprintf("Challenge cleared (received fields: %s)", strings.Join(received, ", ")),
 		CompleteParams: &bridgev2.LoginCompleteParams{
 			UserLoginID: login.ID,
 			UserLogin:   login,
 		},
-	}, nil
+	}
 }
 
 func (dc *DummyChallenge) Cancel() {}
