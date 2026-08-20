@@ -92,10 +92,11 @@ management room.
 
 ### Unresolved media (resolve-on-tap)
 
-`unresolved-media [image|video|fail|slow]`, run **inside a portal room**, generates a placeholder
-media message shaped exactly like an unresolved Instagram reel card: a normal `m.image` preview
+`unresolved-media [image|video|fail|slow]` generates a placeholder media message shaped exactly
+like an unresolved Instagram reel card: a normal `m.image` preview
 carrying a `com.beeper.unresolved_media` marker and an `external_url`. Clients render it as a card
-with an explicit open action, and only resolve it when the user taps.
+with an explicit open action, and only resolve it when the user taps. Run it inside a portal room,
+or from the management room, where it auto-creates a portal to put the placeholder in.
 
 Tapping calls the bridge's resolver endpoint, which applies the result as an edit to the original
 event with `com.beeper.dont_render_edited: true`. The mode controls what happens on that tap:
