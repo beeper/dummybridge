@@ -3,9 +3,11 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +33,118 @@ var AllCommands = []commands.CommandHandler{
 	FileCommand,
 	CatCommand,
 	CatAvatarCommand,
+	UnresolvedMediaCommand,
+}
+
+// UnresolvedMediaCommand generates a placeholder media message shaped exactly like an unresolved
+// Instagram reel card, so the explicit resolve-on-tap flow can be exercised without Instagram.
+//
+// The message is queued through the normal remote event pipeline rather than sent with
+// e.Bot.SendMessage, because the resolver looks the event up in the bridge's message database and
+// bot-sent messages never land there.
+var UnresolvedMediaCommand = &commands.FullHandler{
+	Func: func(e *commands.Event) {
+		mode := unresolvedModeImage
+		if len(e.Args) > 0 {
+			mode = strings.ToLower(e.Args[0])
+		}
+		if !slices.Contains(unresolvedModes, mode) {
+			e.Reply("Unknown mode %q, expected one of: %s", mode, strings.Join(unresolvedModes, ", "))
+			return
+		}
+
+		login := e.User.GetDefaultLogin()
+		if login == nil {
+			e.Reply("No login to generate unresolved media for")
+			return
+		}
+
+		// Commands are usually typed in the management room, which is not a portal. Rather than
+		// making the caller go find a portal first, generate one — same as new-room.
+		portal := e.Portal
+		if portal == nil {
+			var err error
+			portal, err = generatePortal(e.Ctx, e.Bridge, login, 1)
+			if err != nil {
+				e.Reply("Failed to create a portal to put the placeholder in: %s", err)
+				return
+			}
+			e.Reply("Not in a portal, created %s", portal.MXID)
+		}
+
+		// The preview a real bridge would have received inline with the card.
+		catDesc, err := searchCat(e.Ctx)
+		if err != nil {
+			e.Reply("Failed to find a preview image: %s", err)
+			return
+		}
+		mediaMime, mediaData, err := getCat(e.Ctx, catDesc.URL)
+		if err != nil {
+			e.Reply("Failed to fetch a preview image: %s", err)
+			return
+		}
+		url, file, err := e.Bot.UploadMedia(e.Ctx, portal.MXID, mediaData, "preview"+extensionForMime(mediaMime), mediaMime)
+		if err != nil {
+			e.Reply("Failed to upload the preview image: %s", err)
+			return
+		}
+
+		messageID := unresolvedMessageID(mode)
+		externalURL := fakeExternalURL(messageID)
+		// Caption with the link as a trailing anchor, matching how the Instagram connector builds
+		// it — clients read the link out of this rather than from external_url.
+		caption := fmt.Sprintf("<strong>dummybridge</strong><p>Unresolved %s placeholder</p><p><a href=\"%s\">%s</a></p>",
+			mode, externalURL, externalURL)
+		content := &event.MessageEventContent{
+			MsgType:       event.MsgImage,
+			URL:           url,
+			File:          file,
+			Body:          fmt.Sprintf("dummybridge\nUnresolved %s placeholder\n%s", mode, externalURL),
+			Format:        event.FormatHTML,
+			FormattedBody: caption,
+			Info: &event.FileInfo{
+				MimeType: mediaMime,
+				Size:     len(mediaData),
+				Width:    catDesc.Width,
+				Height:   catDesc.Height,
+			},
+		}
+
+		login.QueueRemoteEvent(&simplevent.Message[any]{
+			EventMeta: simplevent.EventMeta{
+				Type:        bridgev2.RemoteEventMessage,
+				PortalKey:   portal.PortalKey,
+				Sender:      bridgev2.EventSender{Sender: networkid.UserID(login.ID), IsFromMe: false},
+				Timestamp:   time.Now(),
+				StreamOrder: time.Now().UnixNano(),
+			},
+			ID: messageID,
+			ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, _ any) (*bridgev2.ConvertedMessage, error) {
+				return &bridgev2.ConvertedMessage{
+					Parts: []*bridgev2.ConvertedMessagePart{{
+						Type:    event.EventMessage,
+						Content: content,
+						Extra: map[string]any{
+							"external_url": externalURL,
+							"com.beeper.unresolved_media": &unresolvedMediaContent{
+								Kind: "permanent",
+								Base: filterUnresolvedMediaContent(content),
+							},
+						},
+					}},
+				}, nil
+			},
+		})
+
+		e.Reply("Queued unresolved media (%s) in %s with message ID %s", mode, portal.MXID, messageID)
+	},
+	Name: "unresolved-media",
+	Help: commands.HelpMeta{
+		Description: "Create an unresolved media placeholder that resolves on tap",
+		Args:        "[image|video|fail|slow]",
+		Section:     DummyHelpsection,
+	},
+	RequiresLogin: true,
 }
 
 var DummyHelpsection = commands.HelpSection{

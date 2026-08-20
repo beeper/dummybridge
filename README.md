@@ -90,6 +90,27 @@ DummyBridge supports several commands for testing purposes, such as creating new
 generating ghosts, and sending messages. These commands can be executed within the bridge's
 management room.
 
+### Unresolved media (resolve-on-tap)
+
+`unresolved-media [image|video|fail|slow]` generates a placeholder media message shaped exactly
+like an unresolved Instagram reel card: a normal `m.image` preview
+carrying a `com.beeper.unresolved_media` marker and an `external_url`. Clients render it as a card
+with an explicit open action, and only resolve it when the user taps. Run it inside a portal room,
+or from the management room, where it auto-creates a portal to put the placeholder in.
+
+Tapping calls the bridge's resolver endpoint, which applies the result as an edit to the original
+event with `com.beeper.dont_render_edited: true`. The mode controls what happens on that tap:
+
+| Mode | Behaviour |
+|---|---|
+| `image` (default) | Resolves to a different image, so it is obvious the media changed |
+| `video` | Resolves to a short video — the edit **changes msgtype**, which is the case clients most often get wrong |
+| `fail` | Returns an error; the card must stay intact and the account must stay connected |
+| `slow` | Waits ~10s before resolving, to exercise loading states and cancellation |
+
+The mode is encoded in the message ID, so the bridge decides what to do from its own state and
+never trusts what the client echoed back — matching how a real connector behaves.
+
 ## License
 
 This project currently does not have a published license.
