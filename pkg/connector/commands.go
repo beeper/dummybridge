@@ -36,7 +36,7 @@ var AllCommands = []commands.CommandHandler{
 	UnresolvedMediaCommand,
 }
 
-// UnresolvedMediaCommand generates a placeholder media message shaped exactly like an unresolved
+// UnresolvedMediaCommand generates a placeholder media message based on an unresolved
 // Instagram reel card, so the explicit resolve-on-tap flow can be exercised without Instagram.
 //
 // The message is queued through the normal remote event pipeline rather than sent with
