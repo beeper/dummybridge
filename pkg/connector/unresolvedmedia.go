@@ -22,7 +22,6 @@ import (
 //go:embed resolvedsample.mp4
 var resolvedSampleVideo []byte
 
-// unresolvedMediaContent uses the unresolved Instagram card marker with an optional display hint.
 type unresolvedMediaContent struct {
 	Kind      string                     `json:"kind"`
 	MediaType string                     `json:"media_type,omitempty"`
