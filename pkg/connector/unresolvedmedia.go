@@ -22,12 +22,10 @@ import (
 //go:embed resolvedsample.mp4
 var resolvedSampleVideo []byte
 
-// unresolvedMediaContent mirrors the marker mautrix-meta puts on unresolved Instagram cards
-// (`UnresolvedMediaContent` in pkg/msgconv/igconv/xma.go). Keeping the shape and field names
-// identical is the whole point: clients must not need to special-case dummybridge.
 type unresolvedMediaContent struct {
-	Kind string                     `json:"kind"`
-	Base *event.MessageEventContent `json:"fi.mau.instagram.base_part,omitempty"`
+	Kind      string                     `json:"kind"`
+	MediaType string                     `json:"media_type,omitempty"`
+	Base      *event.MessageEventContent `json:"fi.mau.instagram.base_part,omitempty"`
 }
 
 // filterUnresolvedMediaContent mirrors the bridge's own filtering: only the fields a client needs
@@ -100,7 +98,10 @@ func (dc *DummyClient) ResolveMedia(
 ) (*bridgev2.ResolvedMedia, error) {
 	// Validate the echoed marker exactly as the real bridge does, so a client that fails to send
 	// it back fails here too rather than silently working against the test bridge.
-	var marker unresolvedMediaContent
+	var marker struct {
+		unresolvedMediaContent
+		MediaType json.RawMessage `json:"media_type"`
+	}
 	if err := json.Unmarshal(unresolvedMedia, &marker); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal unresolved media: %w", err)
 	} else if marker.Base == nil {

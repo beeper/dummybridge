@@ -36,7 +36,7 @@ var AllCommands = []commands.CommandHandler{
 	UnresolvedMediaCommand,
 }
 
-// UnresolvedMediaCommand generates a placeholder media message shaped exactly like an unresolved
+// UnresolvedMediaCommand generates a placeholder media message based on an unresolved
 // Instagram reel card, so the explicit resolve-on-tap flow can be exercised without Instagram.
 //
 // The message is queued through the normal remote event pipeline rather than sent with
@@ -51,6 +51,13 @@ var UnresolvedMediaCommand = &commands.FullHandler{
 		if !slices.Contains(unresolvedModes, mode) {
 			e.Reply("Unknown mode %q, expected one of: %s", mode, strings.Join(unresolvedModes, ", "))
 			return
+		}
+		var mediaType string
+		switch mode {
+		case unresolvedModeImage:
+			mediaType = "image"
+		case unresolvedModeVideo, unresolvedModeSlow:
+			mediaType = "video"
 		}
 
 		login := e.User.GetDefaultLogin()
@@ -127,8 +134,9 @@ var UnresolvedMediaCommand = &commands.FullHandler{
 						Extra: map[string]any{
 							"external_url": externalURL,
 							"com.beeper.unresolved_media": &unresolvedMediaContent{
-								Kind: "permanent",
-								Base: filterUnresolvedMediaContent(content),
+								Kind:      "permanent",
+								MediaType: mediaType,
+								Base:      filterUnresolvedMediaContent(content),
 							},
 						},
 					}},

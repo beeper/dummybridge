@@ -92,8 +92,8 @@ management room.
 
 ### Unresolved media (resolve-on-tap)
 
-`unresolved-media [image|video|fail|slow]` generates a placeholder media message shaped exactly
-like an unresolved Instagram reel card: a normal `m.image` preview
+`unresolved-media [image|video|fail|slow]` generates a placeholder media message based on
+an unresolved Instagram reel card: a normal `m.image` preview
 carrying a `com.beeper.unresolved_media` marker and an `external_url`. Clients render it as a card
 with an explicit open action, and only resolve it when the user taps. Run it inside a portal room,
 or from the management room, where it auto-creates a portal to put the placeholder in.
@@ -107,6 +107,10 @@ event with `com.beeper.dont_render_edited: true`. The mode controls what happens
 | `video` | Resolves to a short video — the edit **changes msgtype**, which is the case clients most often get wrong |
 | `fail` | Returns an error; the card must stay intact and the account must stay connected |
 | `slow` | Waits ~10s before resolving, to exercise loading states and cancellation |
+
+The marker's optional `media_type` display hint accepts `image`, `video`, `audio`, `file`, or
+`sticker`; absence means unknown. It does not guarantee the final event type. The `image` mode
+sets `image`, `video` and `slow` set `video`, and `fail` omits the hint to exercise the unknown fallback.
 
 The mode is encoded in the message ID, so the bridge decides what to do from its own state and
 never trusts what the client echoed back — matching how a real connector behaves.
