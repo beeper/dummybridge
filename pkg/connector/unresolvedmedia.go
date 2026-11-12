@@ -22,12 +22,11 @@ import (
 //go:embed resolvedsample.mp4
 var resolvedSampleVideo []byte
 
-// unresolvedMediaContent mirrors the marker mautrix-meta puts on unresolved Instagram cards
-// (`UnresolvedMediaContent` in pkg/msgconv/igconv/xma.go). Keeping the shape and field names
-// identical is the whole point: clients must not need to special-case dummybridge.
+// unresolvedMediaContent uses the unresolved Instagram card marker with an optional display hint.
 type unresolvedMediaContent struct {
-	Kind string                     `json:"kind"`
-	Base *event.MessageEventContent `json:"fi.mau.instagram.base_part,omitempty"`
+	Kind      string                     `json:"kind"`
+	MediaType string                     `json:"media_type,omitempty"`
+	Base      *event.MessageEventContent `json:"fi.mau.instagram.base_part,omitempty"`
 }
 
 // filterUnresolvedMediaContent mirrors the bridge's own filtering: only the fields a client needs

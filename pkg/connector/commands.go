@@ -52,6 +52,13 @@ var UnresolvedMediaCommand = &commands.FullHandler{
 			e.Reply("Unknown mode %q, expected one of: %s", mode, strings.Join(unresolvedModes, ", "))
 			return
 		}
+		var mediaType string
+		switch mode {
+		case unresolvedModeImage:
+			mediaType = "image"
+		case unresolvedModeVideo, unresolvedModeSlow:
+			mediaType = "video"
+		}
 
 		login := e.User.GetDefaultLogin()
 		if login == nil {
@@ -127,8 +134,9 @@ var UnresolvedMediaCommand = &commands.FullHandler{
 						Extra: map[string]any{
 							"external_url": externalURL,
 							"com.beeper.unresolved_media": &unresolvedMediaContent{
-								Kind: "permanent",
-								Base: filterUnresolvedMediaContent(content),
+								Kind:      "permanent",
+								MediaType: mediaType,
+								Base:      filterUnresolvedMediaContent(content),
 							},
 						},
 					}},
