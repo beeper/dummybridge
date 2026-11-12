@@ -98,7 +98,10 @@ func (dc *DummyClient) ResolveMedia(
 ) (*bridgev2.ResolvedMedia, error) {
 	// Validate the echoed marker exactly as the real bridge does, so a client that fails to send
 	// it back fails here too rather than silently working against the test bridge.
-	var marker unresolvedMediaContent
+	var marker struct {
+		unresolvedMediaContent
+		MediaType json.RawMessage `json:"media_type"`
+	}
 	if err := json.Unmarshal(unresolvedMedia, &marker); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal unresolved media: %w", err)
 	} else if marker.Base == nil {
