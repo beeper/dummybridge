@@ -110,6 +110,7 @@ func postSetCookies(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{
 			Name:     k,
 			Value:    v,
+			Path:     "/",
 			Expires:  time.Now().Add(1 * time.Hour),
 			HttpOnly: true,
 			Secure:   true,
