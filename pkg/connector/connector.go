@@ -89,24 +89,24 @@ func (dc *DummyConnector) LoadUserLogin(ctx context.Context, login *bridgev2.Use
 
 func (dc *DummyConnector) GetLoginFlows() []bridgev2.LoginFlow {
 	return []bridgev2.LoginFlow{{
-		Name:        "Password",
-		Description: "Log in with a password",
+		Name:        msgFlowPasswordName.Message(),
+		Description: msgFlowPasswordDescription.Message(),
 		ID:          "password",
 	}, {
-		Name:        "Cookies",
-		Description: "Log in with extracted cookies",
+		Name:        msgFlowCookiesName.Message(),
+		Description: msgFlowCookiesDescription.Message(),
 		ID:          "cookies",
 	}, {
-		Name:        "Local storage",
-		Description: "Log in with extracted local storage",
+		Name:        msgFlowLocalStorageName.Message(),
+		Description: msgFlowLocalStorageDescription.Message(),
 		ID:          "localstorage",
 	}, {
-		Name:        "Display and wait",
-		Description: "Log in through a remote server",
+		Name:        msgFlowDisplayAndWaitName.Message(),
+		Description: msgFlowDisplayAndWaitDescription.Message(),
 		ID:          "displayandwait",
 	}, {
-		Name:        "WebAuthn",
-		Description: "Log in with a passkey",
+		Name:        msgFlowWebAuthnName.Message(),
+		Description: msgFlowWebAuthnDescription.Message(),
 		ID:          "webauthn",
 	}}
 }
